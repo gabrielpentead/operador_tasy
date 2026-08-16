@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Central de Operadores - Painel Chamado de Senhas Tasy">
+    <meta name="theme-color" content="#06534d">
+    <title>Central de Operadores - Painel Chamado de Senhas Tasy</title>
+    <link rel="icon" href="/static/img/favicon.ico" type="image/x-icon">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .hero-section {
+            background: none;
+            padding: 1rem 0;
+            margin-bottom: 2rem;
+            border-radius: var(--border-radius);
+            color: var(--gray-800);
+            box-shadow: none;
+        }
+        
+        .dashboard-counter {
+            font-size: 3rem;
+            font-weight: 700;
+            line-height: 1;
+            margin-bottom: 0.5rem;
+            color: #fff;
+        }
+        
+        .dashboard-counter-label {
+            font-size: 1rem;
+            color: rgba(255, 255, 255, 0.8);
+            font-weight: 500;
+        }
+        
+        .dashboard-counter-icon {
+            font-size: 2.5rem;
+            opacity: 0.8;
+            margin-bottom: 0.5rem;
+        }
+        
+        .operador-card {
+            height: 100%;
+        }
+        
+        .operador-card .card-header {
+            background: linear-gradient(to right, var(--primary-color), var(--primary-dark));
+            color: white;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .pulse-animation {
+            animation: pulse-light 2s infinite;
+        }
+        
+        @keyframes pulse-light {
+            0% { opacity: 0.7; }
+            50% { opacity: 1; }
+            100% { opacity: 0.7; }
+        }
+        
+        /* Sobrescrever efeitos hover dos cards */
+        .status-card:hover {
+            transform: none;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.08);
+        }
+    </style>
+</head>
+<body>
+    <!-- Header principal -->
+    <header class="navbar navbar-expand-lg navbar-dark">
+        <div class="container">
+            <!-- Logo e título -->
+            <a class="navbar-brand" href="/">
+                <img src="/static/img/logo.png" alt="Logo HSV" class="logo-header">
+                <span class="brand-text">Central de Operadores - HSV</span>
+            </a>
+            
+            <!-- Botão de menu para mobile -->
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            
+            <!-- Menu de navegação -->
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto align-items-center">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/">
+                            <i class="bi bi-speedometer2"></i> Dashboard
+                        </a>
+                    </li>
+                    <!-- ── Sino de Notificações ── -->
+                    <li class="nav-item ms-2">
+                        <button class="notif-bell" id="notif-bell-btn"
+                                onclick="toggleNotifPanel()"
+                                aria-label="Notificações" title="Central de Notificações">
+                            <i class="bi bi-bell-fill"></i>
+                            <span class="notif-badge d-none" id="notif-badge">0</span>
+                        </button>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Cards de Status Consolidados -->
+        <div class="row mb-4">
+            <!-- Card de Monitores -->
+            <div class="col-lg-6 mb-4">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-header bg-white border-bottom-0 pt-4 pb-0 px-4">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <div class="d-flex align-items-center">
+                                <div class="me-3 text-center" style="min-width: 40px;">
+                                     <span class="d-block display-5 fw-bold text-dark lh-1" id="monitores-cadastrados">0</span>
+                                </div>
+                                <div class="border-start ps-3 py-1">
+                                    <h4 class="card-title mb-0 fw-bold text-dark">Monitores</h4>
+                                    <small class="text-muted">Visão geral</small>
+                                </div>
+                            </div>
+                            <div class="rounded-circle bg-primary bg-opacity-10 p-3">
+                                <img src="/static/img/monitor.png" alt="Monitores" width="24" height="24">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body p-4">
+                        <div class="row g-3">
+                            <div class="col-6">
+                                <div class="p-3 rounded-3 bg-success bg-opacity-10 h-100 border border-success border-opacity-25">
+                                    <span class="d-block text-success small text-uppercase fw-semibold mb-2">Online</span>
+                                    <span class="d-block display-6 fw-bold text-success" id="monitores-online">0</span>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="p-3 rounded-3 bg-danger bg-opacity-10 h-100 border border-danger border-opacity-25">
+                                    <span class="d-block text-danger small text-uppercase fw-semibold mb-2">Offline</span>
+                                    <span class="d-block display-6 fw-bold text-danger" id="monitores-offline">0</span>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="p-3 rounded-3 bg-info bg-opacity-10 h-100 border border-info border-opacity-25">
+                                    <span class="d-block text-info small text-uppercase fw-semibold mb-2">Iniciados</span>
+                                    <span class="d-block display-6 fw-bold text-info" id="monitores-iniciados">0</span>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="p-3 rounded-3 bg-warning bg-opacity-10 h-100 border border-warning border-opacity-25">
+                                    <span class="d-block text-warning small text-uppercase fw-semibold mb-2">Parados</span>
+                                    <span class="d-block display-6 fw-bold text-warning" id="monitores-parados">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Card de Totens -->
+            <div class="col-lg-6 mb-4">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-header bg-white border-bottom-0 pt-4 pb-0 px-4">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <div class="d-flex align-items-center">
+                                <div class="me-3 text-center" style="min-width: 40px;">
+                                     <span class="d-block display-5 fw-bold text-dark lh-1" id="totens-cadastrados">0</span>
+                                </div>
+                                <div class="border-start ps-3 py-1">
+                                    <h4 class="card-title mb-0 fw-bold text-dark">Totens</h4>
+                                    <small class="text-muted">Visão geral</small>
+                                </div>
+                            </div>
+                            <div class="rounded-circle bg-primary bg-opacity-10 p-3">
+                                <img src="/static/img/totem.png" alt="Totens" width="24" height="24">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body p-4">
+                        <div class="row g-3">
+                            <div class="col-6">
+                                <div class="p-3 rounded-3 bg-success bg-opacity-10 h-100 border border-success border-opacity-25">
+                                    <span class="d-block text-success small text-uppercase fw-semibold mb-2">Online</span>
+                                    <span class="d-block display-6 fw-bold text-success" id="totens-online">0</span>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="p-3 rounded-3 bg-danger bg-opacity-10 h-100 border border-danger border-opacity-25">
+                                    <span class="d-block text-danger small text-uppercase fw-semibold mb-2">Offline</span>
+                                    <span class="d-block display-6 fw-bold text-danger" id="totens-offline">0</span>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="p-3 rounded-3 bg-info bg-opacity-10 h-100 border border-info border-opacity-25">
+                                    <span class="d-block text-info small text-uppercase fw-semibold mb-2">Iniciados</span>
+                                    <span class="d-block display-6 fw-bold text-info" id="totens-iniciados">0</span>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="p-3 rounded-3 bg-warning bg-opacity-10 h-100 border border-warning border-opacity-25">
+                                    <span class="d-block text-warning small text-uppercase fw-semibold mb-2">Parados</span>
+                                    <span class="d-block display-6 fw-bold text-warning" id="totens-parados">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- ══ INFORMAÇÕES DO SERVIDOR ═══════════════════════════════════════ -->
+        <div class="card mb-4 border-0 shadow-sm" id="card-server-health">
+            <div class="card-body py-3 px-4">
+
+                <!-- Cabeçalho compacto -->
+                <div class="d-flex align-items-center gap-2 mb-3">
+                    <div class="server-health-icon">
+                        <i class="bi bi-hdd-network-fill"></i>
+                    </div>
+                    <div>
+                        <span class="fw-semibold text-dark" style="font-size:.9rem;">Servidor</span>
+                        <span class="text-muted ms-2" style="font-size:.75rem;" id="sh-server-addr">172.16.28.95:5000</span>
+                    </div>
+                    <span class="badge bg-success ms-auto" id="sh-status-badge" style="font-size:.7rem;">
+                        <i class="bi bi-circle-fill me-1" style="font-size:.45rem;vertical-align:middle;"></i>Online
+                    </span>
+                    <span class="text-muted ms-2" style="font-size:.7rem;" id="sh-last-update">–</span>
+                </div>
+
+                <!-- Strip horizontal de métricas (ordem: CPU · RAM · Disco · Temperatura · Latência · Uptime) -->
+                <div class="sh-strip">
+
+                    <div class="sh-strip-item">
+                        <div class="sh-strip-icon" style="color:#3b82f6;"><i class="bi bi-cpu"></i></div>
+                        <div class="sh-strip-body">
+                            <span class="sh-strip-label">CPU</span>
+                            <span class="sh-strip-val" id="sh-cpu-pct">–</span>
+                            <div class="sh-strip-bar-wrap">
+                                <div class="sh-strip-bar-track">
+                                    <div class="sh-strip-bar-fill" id="sh-cpu-bar" style="width:0%;background:#3b82f6;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="sh-strip-sep"></div>
+
+                    <div class="sh-strip-item">
+                        <div class="sh-strip-icon" style="color:#8b5cf6;"><i class="bi bi-memory"></i></div>
+                        <div class="sh-strip-body">
+                            <span class="sh-strip-label">RAM</span>
+                            <span class="sh-strip-val" id="sh-ram-pct">–</span>
+                            <div class="sh-strip-bar-wrap">
+                                <div class="sh-strip-bar-track">
+                                    <div class="sh-strip-bar-fill" id="sh-ram-bar" style="width:0%;background:#8b5cf6;"></div>
+                                </div>
+                            </div>
+                            <span class="sh-strip-sub" id="sh-ram-label">–</span>
+                        </div>
+                    </div>
+
+                    <div class="sh-strip-sep"></div>
+
+                    <div class="sh-strip-item">
+                        <div class="sh-strip-icon" style="color:#f59e0b;"><i class="bi bi-device-hdd"></i></div>
+                        <div class="sh-strip-body">
+                            <span class="sh-strip-label">Disco</span>
+                            <span class="sh-strip-val" id="sh-disco-pct">–</span>
+                            <div class="sh-strip-bar-wrap">
+                                <div class="sh-strip-bar-track">
+                                    <div class="sh-strip-bar-fill" id="sh-disco-bar" style="width:0%;background:#f59e0b;"></div>
+                                </div>
+                            </div>
+                            <span class="sh-strip-sub" id="sh-disco-label">–</span>
+                        </div>
+                    </div>
+
+                    <div class="sh-strip-sep"></div>
+
+                    <div class="sh-strip-item">
+                        <div class="sh-strip-icon" style="color:#ef4444;"><i class="bi bi-thermometer-half"></i></div>
+                        <div class="sh-strip-body">
+                            <span class="sh-strip-label">Temp.</span>
+                            <span class="sh-strip-val" id="sh-temp-val">–</span>
+                            <span class="sh-strip-sub" id="sh-temp-label">–</span>
+                        </div>
+                    </div>
+
+                    <div class="sh-strip-sep"></div>
+
+                    <div class="sh-strip-item">
+                        <div class="sh-strip-icon" style="color:#06534d;"><i class="bi bi-wifi"></i></div>
+                        <div class="sh-strip-body">
+                            <span class="sh-strip-label">Latência</span>
+                            <span class="sh-strip-val" id="sh-latencia-val">–</span>
+                            <span class="sh-strip-sub" id="sh-latencia-sub">–</span>
+                        </div>
+                    </div>
+
+                    <div class="sh-strip-sep"></div>
+
+                    <div class="sh-strip-item">
+                        <div class="sh-strip-icon" style="color:#10b981;"><i class="bi bi-clock-history"></i></div>
+                        <div class="sh-strip-body">
+                            <span class="sh-strip-label">Uptime</span>
+                            <span class="sh-strip-val sh-strip-val-sm" id="sh-uptime-val">–</span>
+                        </div>
+                    </div>
+
+                </div><!-- /.sh-strip -->
+
+                <!-- Erro de carregamento -->
+                <div id="sh-error" class="text-danger small mt-2 d-none">
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+                    <span id="sh-error-msg"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══ BARRA DE FILTRO ═══════════════════════════════════════════════ -->
+        <div class="mb-4">
+            <div class="input-group">
+                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                <input type="text" class="form-control" id="filtro-operador" placeholder="Filtrar operadores...">
+            </div>
+        </div>
+
+        <!-- Lista de Operadores -->
+        <div class="row" id="lista-operadores">
+            <!-- Mensagem de carregamento -->
+            <div class="col-12 text-center py-5" id="carregando-operadores">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Carregando...</span>
+                </div>
+                <p class="mt-2">Carregando operadores...</p>
+            </div>
+        </div>
+        
+        <!-- Mensagem Sem Operadores -->
+        <div id="sem-operadores" class="text-center py-5 d-none">
+            <i class="bi bi-exclamation-circle text-muted" style="font-size: 3rem;"></i>
+            <h4 class="mt-3">Nenhum operador cadastrado</h4>
+            <p class="text-muted">Adicione um operador para começar a utilizar o sistema</p>
+            <button class="btn btn-primary mt-2" data-bs-toggle="modal" data-bs-target="#modalAdicionarOperador">
+                <i class="bi bi-plus-circle"></i> Adicionar Operador
+            </button>
+        </div>
+        
+        <!-- Footer -->
+        <footer class="mt-5 pt-4 pb-2 text-center text-muted">
+            <p class="small">NTI - Núcleo de Tecnologia da Informação</p>
+        </footer>
+    </div>
+
+    <!-- Modal de Adicionar Operador -->
+    <div class="modal fade" id="modalAdicionarOperador" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-plus-circle"></i> Adicionar Novo Operador</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="formAdicionarOperador">
+                        <div class="mb-3">
+                            <label for="nome" class="form-label">Nome do Operador</label>
+                            <input type="text" class="form-control" id="nome" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="descricao" class="form-label">Descrição</label>
+                            <textarea class="form-control" id="descricao" rows="2"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="username" class="form-label">Nome de Usuário</label>
+                            <input type="text" class="form-control" id="username" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="password" class="form-label">Senha</label>
+                            <input type="password" class="form-control" id="password" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="tipo_cadastro" class="form-label">Tipo de Cadastro</label>
+                            <select class="form-select" id="tipo_cadastro" required>
+                                <option value="Monitor de Senhas" selected>Monitor de Senhas (TV)</option>
+                                <option value="Totem de Senhas">Totem de Senhas (Chamada)</option>
+                                <option value="Ambos">Ambos (Monitor e Totem)</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="btnSalvarOperador">Salvar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Editar Operador -->
+    <div class="modal fade" id="modalEditarOperador" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-pencil-square"></i> Editar Operador</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="formEditarOperador">
+                        <input type="hidden" id="edit-id">
+                        <div class="mb-3">
+                            <label for="edit-nome" class="form-label">Nome do Operador</label>
+                            <input type="text" class="form-control" id="edit-nome" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="edit-descricao" class="form-label">Descrição</label>
+                            <textarea class="form-control" id="edit-descricao" rows="2"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="edit-tipo_cadastro" class="form-label">Tipo de Cadastro</label>
+                            <select class="form-select" id="edit-tipo_cadastro" required>
+                                <option value="Monitor de Senhas">Monitor de Senhas (TV)</option>
+                                <option value="Totem de Senhas">Totem de Senhas (Chamada)</option>
+                                <option value="Ambos">Ambos (Monitor e Totem)</option>
+                            </select>
+                        </div>
+
+                        <hr>
+
+                        <!-- Seção de Credenciais -->
+                        <div id="credenciais-section">
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" id="edit-usa_credenciais_separadas">
+                                <label class="form-check-label" for="edit-usa_credenciais_separadas">Usar credenciais diferentes para Monitor e Totem</label>
+                            </div>
+
+                            <!-- Campos de Credenciais Compartilhadas -->
+                            <div id="shared-credentials">
+                                <div class="mb-3">
+                                    <label for="edit-username" class="form-label">Nome de Usuário (Compartilhado)</label>
+                                    <input type="text" class="form-control" id="edit-username">
+                                </div>
+                                <div class="mb-3">
+                                    <label for="edit-password" class="form-label">Senha (Compartilhada)</label>
+                                    <input type="password" class="form-control" id="edit-password">
+                                </div>
+                            </div>
+
+                            <!-- Campos de Credenciais Separadas -->
+                            <div id="separate-credentials" style="display: none;">
+                                <h6 class="mt-4">Credenciais do Monitor</h6>
+                                <div class="mb-3">
+                                    <label for="edit-username_monitor" class="form-label">Usuário do Monitor</label>
+                                    <input type="text" class="form-control" id="edit-username_monitor">
+                                </div>
+                                <div class="mb-3">
+                                    <label for="edit-password_monitor" class="form-label">Senha do Monitor</label>
+                                    <input type="password" class="form-control" id="edit-password_monitor">
+                                </div>
+
+                                <h6 class="mt-4">Credenciais do Totem</h6>
+                                <div class="mb-3">
+                                    <label for="edit-username_totem" class="form-label">Usuário do Totem</label>
+                                    <input type="text" class="form-control" id="edit-username_totem">
+                                </div>
+                                <div class="mb-3">
+                                    <label for="edit-password_totem" class="form-label">Senha do Totem</label>
+                                    <input type="password" class="form-control" id="edit-password_totem">
+                                </div>
+                            </div>
+                        </div>
+
+                        <hr>
+
+
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="btnAtualizarOperador">Salvar Alterações</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Confirmação de Exclusão -->
+    <div class="modal fade" id="modalConfirmarExclusao" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title"><i class="bi bi-exclamation-triangle"></i> Confirmar Exclusão</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="text-center mb-4">
+                        <i class="bi bi-trash text-danger" style="font-size: 3rem;"></i>
+                    </div>
+                    <p class="text-center">Tem certeza que deseja excluir o operador <strong id="nome-operador-exclusao"></strong>?</p>
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle-fill"></i> Esta ação não pode ser desfeita.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-danger" id="btnConfirmarExclusao">Excluir Permanentemente</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Confirmação de Ação para Ambos -->
+    <div class="modal fade" id="modalConfirmarAcao" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalAcaoTitulo"><i class="bi bi-question-circle"></i> Confirmar Ação</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Para qual parte do operador <strong id="nome-operador-acao"></strong> você deseja enviar o comando?</p>
+                    <div class="d-grid gap-2">
+                        <button type="button" class="btn btn-outline-primary" id="btnAcaoMonitor"><i class="bi bi-display"></i> Apenas Monitor</button>
+                        <button type="button" class="btn btn-outline-primary" id="btnAcaoTotem"><i class="bi bi-printer"></i> Apenas Totem</button>
+                        <button type="button" class="btn btn-primary" id="btnAcaoAmbos"><i class="bi bi-collection"></i> Ambos</button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Senha Admin -->
+    <div class="modal fade" id="modalSenhaAdmin" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-sm modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header py-2 bg-primary text-white">
+                    <h6 class="modal-title fw-bold"><i class="bi bi-shield-lock"></i> Acesso Restrito</h6>
+                    <button type="button" class="btn-close btn-close-white btn-sm" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="admin-password-input" class="form-label small text-muted">Digite a senha de administrador</label>
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text"><i class="bi bi-key"></i></span>
+                            <input type="password" class="form-control text-center" id="admin-password-input" autocomplete="off" placeholder="">
+                        </div>
+                        <div id="admin-password-error" class="text-danger small mt-2 text-center d-none"><i class="bi bi-exclamation-circle"></i> Senha incorreta</div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-primary w-100" id="btnConfirmarSenhaAdmin">Confirmar Acesso</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ CONTAINER DE TOASTS (notificações flutuantes) ════════════════════ -->
+    <div id="toast-container" style="position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;display:flex;flex-direction:column;gap:.5rem;min-width:280px;max-width:340px;"></div>
+
+    <!-- ══ PAINEL DE NOTIFICAÇÕES (fora do navbar para não ser cortado) ════ -->
+    <div class="notif-panel" id="notif-panel" role="dialog" aria-label="Notificações">
+        <div class="notif-panel-header">
+            <span class="notif-panel-title">
+                <i class="bi bi-bell-fill me-2"></i>Notificações
+            </span>
+            <div class="notif-panel-actions">
+                <button class="notif-action-btn" onclick="notifMarkAllRead()" title="Marcar todas como lidas">
+                    <i class="bi bi-check2-all"></i>
+                </button>
+                <button class="notif-action-btn notif-action-btn-danger" onclick="notifClearAll()" title="Limpar todas">
+                    <i class="bi bi-trash3"></i>
+                </button>
+            </div>
+        </div>
+        <div class="notif-list" id="notif-list"></div>
+        <div class="notif-empty d-none" id="notif-empty">
+            <i class="bi bi-bell-slash"></i>
+            <span>Sem notificações</span>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Usar cliente Socket.IO local -->
+    <script src="/static/js/socket.io.min.js"></script>
+    <script src="/static/js/common.js?v=1.4.1"></script>
+    <script src="/static/js/dashboard.js?v=1.4.1"></script>
+
+    <!-- ══ HEALTH CHECK + FILTRO OFFLINE + TOASTS ═════════════════════════════ -->
+    <script>
+    (function () {
+        'use strict';
+
+        /* ─── Utilidades ──────────────────────────────────────────────── */
+        function pctColor(pct, thresholds) {
+            // thresholds: [warn%, danger%]
+            if (pct >= thresholds[1]) return 'bg-danger';
+            if (pct >= thresholds[0]) return 'bg-warning';
+            return null; // mantém a cor original do elemento
+        }
+
+        function formatBytes(used, total) {
+            return used + ' GB / ' + total + ' GB';
+        }
+
+        function latenciaClass(ms) {
+            if (ms === null) return { badge: 'bg-secondary', text: 'N/D' };
+            if (ms < 10)     return { badge: 'bg-success',   text: 'Ótima' };
+            if (ms < 50)     return { badge: 'bg-info',      text: 'Boa' };
+            if (ms < 150)    return { badge: 'bg-warning text-dark', text: 'Média' };
+            return             { badge: 'bg-danger',   text: 'Alta' };
+        }
+
+        /* ─── Health Check do Servidor ───────────────────────────────── */
+        function atualizarHealthCheck() {
+            fetch('/api/servidor/saude')
+                .then(r => r.json())
+                .then(data => {
+                    const errEl = document.getElementById('sh-error');
+                    if (!data.success) {
+                        if (errEl) { errEl.classList.remove('d-none'); document.getElementById('sh-error-msg').textContent = data.error || 'Erro desconhecido'; }
+                        _setBadge('sh-status-badge', 'bg-danger', 'Erro');
+                        return;
+                    }
+                    if (errEl) errEl.classList.add('d-none');
+                    const s = data.saude;
+
+                    // ── CPU ──────────────────────────────────────────────
+                    const cpuPct = s.cpu_percentual;
+                    _setText('sh-cpu-pct', Math.round(cpuPct) + '%');
+                    _setBar('sh-cpu-bar', cpuPct, '#3b82f6', [[70,'#f59e0b'],[90,'#ef4444']]);
+
+                    // ── RAM ──────────────────────────────────────────────
+                    const ramPct = s.ram.percentual;
+                    _setText('sh-ram-pct',  Math.round(ramPct) + '%');
+                    _setText('sh-ram-label', formatBytes(s.ram.usado_gb, s.ram.total_gb));
+                    _setBar('sh-ram-bar', ramPct, '#8b5cf6', [[70,'#f59e0b'],[90,'#ef4444']]);
+
+                    // ── Disco ────────────────────────────────────────────
+                    const discoPct = s.disco.percentual;
+                    _setText('sh-disco-pct',  Math.round(discoPct) + '%');
+                    _setText('sh-disco-label', formatBytes(s.disco.usado_gb, s.disco.total_gb));
+                    _setBar('sh-disco-bar', discoPct, '#f59e0b', [[70,'#ef4444']]);
+
+                    // ── Temperatura ──────────────────────────────────────
+                    const temp = s.temperatura_cpu;
+                    if (temp !== null && temp !== undefined) {
+                        const tColor = temp >= 85 ? '#ef4444' : temp >= 75 ? '#f59e0b' : '#10b981';
+                        _setText('sh-temp-val',   Math.round(temp) + '°C');
+                        _setStyle('sh-temp-val',  'color', tColor);
+                        _setText('sh-temp-label', temp >= 85 ? 'Alta' : temp >= 75 ? 'Elevada' : 'Normal');
+                    } else {
+                        _setText('sh-temp-val',   '–');
+                        _setText('sh-temp-label', 'N/D');
+                    }
+
+                    // ── Latência ─────────────────────────────────────────
+                    const lat = s.latencia_ms;
+                    if (lat !== null && lat !== undefined) {
+                        const latColor = lat >= 150 ? '#ef4444' : lat >= 50 ? '#f59e0b' : '#10b981';
+                        const latLabel = lat >= 150 ? 'Alta' : lat >= 50 ? 'Média' : lat < 10 ? 'Ótima' : 'Boa';
+                        _setText('sh-latencia-val',   Math.round(lat) + ' ms');
+                        _setStyle('sh-latencia-val',  'color', latColor);
+                        _setText('sh-latencia-sub',   latLabel);
+                    } else {
+                        _setText('sh-latencia-val', '–');
+                        _setText('sh-latencia-sub', 'N/D');
+                    }
+
+                    // ── Uptime ────────────────────────────────────────────
+                    _setText('sh-uptime-val', s.uptime || '–');
+
+                    // ── Timestamp ────────────────────────────────────────
+                    _setText('sh-last-update', 'Atualizado ' + new Date().toLocaleTimeString('pt-BR'));
+                    _setBadge('sh-status-badge', 'bg-success', 'Online');
+                })
+                .catch(() => _setBadge('sh-status-badge', 'bg-secondary', 'Sem dados'));
+        }
+
+        function _setText(id, val) { const e = document.getElementById(id); if (e) e.textContent = val; }
+        function _setStyle(id, prop, val) { const e = document.getElementById(id); if (e) e.style[prop] = val; }
+        function _setBar(id, pct, defaultColor, thresholds) {
+            const bar = document.getElementById(id);
+            if (!bar) return;
+            bar.style.width = Math.min(pct, 100) + '%';
+            bar.style.transition = 'width .6s ease, background .4s ease';
+            let color = defaultColor;
+            (thresholds || []).forEach(([at, c]) => { if (pct >= at) color = c; });
+            bar.style.background = color;
+        }
+        function _setValColor(id, color) {
+            const e = document.getElementById(id);
+            if (e) e.style.color = color;
+        }
+        function _setBadge(id, cls, text) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.className = 'badge ' + cls + ' ms-auto';
+            el.innerHTML = '<i class="bi bi-circle-fill me-1" style="font-size:.45rem;vertical-align:middle;"></i>' + text;
+        }
+
+        // Roda imediatamente e a cada 15s
+        atualizarHealthCheck();
+        setInterval(atualizarHealthCheck, 15000);
+
+        /* ─── Toast de Offline ────────────────────────────────────────── */
+        const pingAudio = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=');
+
+        function mostrarToastOffline(nome) {
+            try { pingAudio.play(); } catch (e) {}
+
+            const id = 'toast-' + Date.now();
+            const div = document.createElement('div');
+            div.id = id;
+            div.style.cssText = [
+                'background:#1e293b',
+                'color:#f1f5f9',
+                'border-radius:10px',
+                'padding:.75rem 1rem',
+                'box-shadow:0 4px 20px rgba(0,0,0,.35)',
+                'display:flex',
+                'align-items:center',
+                'gap:.75rem',
+                'animation:slideInToast .3s ease',
+                'font-size:.85rem'
+            ].join(';');
+            div.innerHTML = `
+                <span style="background:#ef4444;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                    <i class="bi bi-wifi-off" style="color:#fff;font-size:.9rem;"></i>
+                </span>
+                <div style="flex:1;">
+                    <div style="font-weight:600;font-size:.8rem;color:#fca5a5;">Ponto Offline</div>
+                    <div style="color:#cbd5e1;">${nome}</div>
+                </div>
+                <button onclick="this.closest('[id^=toast]').remove()"
+                    style="background:transparent;border:none;color:#94a3b8;font-size:1.1rem;cursor:pointer;line-height:1;padding:0;">×</button>
+            `;
+            document.getElementById('toast-container').prepend(div);
+            setTimeout(() => { if (div.parentNode) div.remove(); }, 8000);
+        }
+
+        // Injeta animação CSS para toast
+        const styleEl = document.createElement('style');
+        styleEl.textContent = `
+            @keyframes slideInToast {
+                from { opacity:0; transform:translateX(40px); }
+                to   { opacity:1; transform:translateX(0); }
+            }
+        `;
+        document.head.appendChild(styleEl);
+
+        /* ─── Integração com Socket.IO — toasts de offline ───────────── */
+        let _offlineTimers = {};
+
+        window._nti = window._nti || {};
+        window._nti.onOperadorOffline = function (nome, id) {
+            if (_offlineTimers[id]) return;
+            _offlineTimers[id] = setTimeout(() => {
+                mostrarToastOffline(nome || id);
+                delete _offlineTimers[id];
+            }, 30000);
+        };
+        window._nti.cancelarOfflineTimer = function (id) {
+            if (_offlineTimers[id]) {
+                clearTimeout(_offlineTimers[id]);
+                delete _offlineTimers[id];
+            }
+        };
+    })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+flask==2.2.5
+flask-socketio==5.3.6
+flask-cors==4.0.0
+python-socketio==5.9.0
+python-engineio==4.7.1
+websocket-client==1.8.0
+requests==2.31.0
+setuptools
+click==8.1.7
+dnspython==2.6.1
+# eventlet removido — incompatível com Python 3.14+ (_thread.start_joinable_thread inexistente)
+email_validator==2.1.1
