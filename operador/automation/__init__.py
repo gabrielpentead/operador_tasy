@@ -5,5 +5,5 @@ Módulo automation do Cliente Operador Tasy
 Contém automação do Tasy, gerenciamento de browser e voz
 """
 
-__version__ = "1.5.2"
+__version__ = "1.5.5"
 __author__ = "Nucleo de Tecnologia da Informação - Hospital São Vicente"

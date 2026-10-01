@@ -6,6 +6,7 @@ Gerenciamento de configurações do Cliente Operador Tasy
 
 import os
 import sys
+import shutil
 import configparser
 from pathlib import Path
 from typing import Tuple, Optional
@@ -74,26 +75,125 @@ class OperadorConfig:
         config.set('monitores', 'totem', '')
         config.set('monitores', 'painel', '')
 
-        with open(self.config_file, 'w', encoding='utf-8') as f:
-            config.write(f)
+        self._gravar_atomico(config)
         logger.info(f"Configuração padrão criada em: {self.config_file}")
+
+    def _gravar_atomico(self, cfg) -> bool:
+        """Grava um ConfigParser no arquivo final sem janela de corrupção.
+
+        Escreve num temporário no MESMO diretório, força os dados ao disco com
+        fsync e só então troca por os.replace(), que é atômico em NTFS. Em
+        qualquer interrupção — queda de energia, desligamento forçado — o
+        arquivo final ou continua sendo o antigo íntegro, ou já é o novo
+        íntegro. Nunca um arquivo pela metade ou zerado.
+        """
+        temporario = self.config_file + '.tmp'
+        try:
+            with open(temporario, 'w', encoding='utf-8') as f:
+                cfg.write(f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporario, self.config_file)
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao gravar configuração: {e}")
+            try:
+                if os.path.exists(temporario):
+                    os.remove(temporario)
+            except Exception:
+                pass
+            return False
     
+    def _config_valido(self, caminho: str) -> bool:
+        """Um config só é considerado bom se abrir E tiver a seção 'operador'.
+
+        Arquivo zerado por queda de energia abre sem erro em alguns casos, mas
+        vem sem seção nenhuma — daí a verificação ir além do parse.
+        """
+        if not os.path.exists(caminho) or os.path.getsize(caminho) == 0:
+            return False
+        try:
+            teste = configparser.ConfigParser()
+            teste.read(caminho, encoding='utf-8')
+            return teste.has_section('operador')
+        except Exception:
+            return False
+
     def load_config(self):
+        """Carrega o config, com queda para o backup antes de desistir.
+
+        O comportamento anterior era destrutivo: qualquer falha de leitura
+        chamava _create_default_config(), que SOBRESCREVIA o arquivo problemático
+        com um padrão em branco. O painel perdia id, nome e credenciais, gerava
+        um id novo e caía no registro interativo — travado esperando digitação
+        numa máquina que muitas vezes nem tem teclado.
+
+        Agora, em caso de falha, o arquivo ruim é preservado como .corrompido
+        (para diagnóstico) e o .bak é tentado antes de recorrer ao padrão.
+        """
+        if self._config_valido(self.config_file):
+            try:
+                self.config.read(self.config_file, encoding='utf-8')
+                logger.debug(f"Configuração carregada de: {self.config_file}")
+                self._salvar_backup()
+                return
+            except Exception as e:
+                logger.error(f"Erro ao carregar configuração: {e}")
+
+        logger.error(f"⚠️ Config inválido ou corrompido: {self.config_file}")
+
+        # Preserva o arquivo ruim em vez de sobrescrevê-lo.
         try:
-            self.config.read(self.config_file, encoding='utf-8')
-            logger.debug(f"Configuração carregada de: {self.config_file}")
-        except Exception as e:
-            logger.error(f"Erro ao carregar configuração: {e}")
-            self._create_default_config()
-            self.config.read(self.config_file, encoding='utf-8')
-    
+            if os.path.exists(self.config_file) and os.path.getsize(self.config_file) > 0:
+                shutil.copy2(self.config_file, self.config_file + '.corrompido')
+                logger.error(f"   Cópia preservada em {self.config_file}.corrompido")
+        except Exception:
+            pass
+
+        backup = self.config_file + '.bak'
+        if self._config_valido(backup):
+            logger.warning(f"🔁 Restaurando configuração a partir do backup: {backup}")
+            try:
+                shutil.copy2(backup, self.config_file)
+                self.config = configparser.ConfigParser()
+                self.config.read(self.config_file, encoding='utf-8')
+                logger.warning("✅ Configuração restaurada do backup. Identidade do painel preservada.")
+                return
+            except Exception as e:
+                logger.error(f"Falha ao restaurar backup: {e}")
+
+        logger.critical("🚨 Sem config válido e sem backup utilizável. Criando padrão — "
+                        "este painel precisará ser cadastrado novamente.")
+        self._create_default_config()
+        self.config = configparser.ConfigParser()
+        self.config.read(self.config_file, encoding='utf-8')
+
+    def _salvar_backup(self):
+        """Guarda uma cópia do config que acabou de ser lido com sucesso."""
+        try:
+            destino = self.config_file + '.bak'
+            mais_novo = (not os.path.exists(destino) or
+                         os.path.getmtime(self.config_file) > os.path.getmtime(destino))
+            if not self._config_valido(destino) or mais_novo:
+                shutil.copy2(self.config_file, destino)
+        except Exception:
+            pass
+
     def save_config(self):
-        try:
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                self.config.write(f)
+        """Grava o config de forma atômica.
+
+        O modo anterior — open(arquivo, 'w') — truncava o arquivo para zero ANTES
+        de escrever. Uma queda de energia nessa janela deixava o config zerado
+        (bytes nulos), e foi exatamente o que aconteceu em dois painéis.
+
+        Aqui: escreve num temporário no mesmo diretório, força a gravação em
+        disco com fsync, e só então troca por os.replace(), que é atômico em
+        NTFS. Ou o arquivo antigo permanece íntegro, ou o novo aparece íntegro.
+        Nunca um meio-termo.
+        """
+        if self._gravar_atomico(self.config):
             logger.debug(f"Configuração salva em: {self.config_file}")
-        except Exception as e:
-            logger.error(f"Erro ao salvar configuração: {e}")
+            self._salvar_backup()
 
     def get_config_dict(self) -> dict:
         """Retorna a configuração como um dicionário."""
@@ -204,7 +304,15 @@ class OperadorConfig:
             return None
 
     def set_edgedriver_version(self, version: str):
-        """Salva a versão atual do EdgeDriver instalado."""
+        """Salva a versão atual do EdgeDriver instalado.
+
+        Relê o arquivo antes de gravar. save_config() persiste o objeto INTEIRO,
+        então um objeto com estado antigo em memória regravaria dados velhos por
+        cima dos atuais — foi assim que uma senha trocada pelo servidor voltava
+        sozinha quando o driver era atualizado. A releitura garante que só a
+        chave desta função mude, seja qual for a instância que chamou.
+        """
+        self.load_config()
         if not self.config.has_section('sistema'):
             self.config.add_section('sistema')
         self.config.set('sistema', 'edgedriver_version', version)

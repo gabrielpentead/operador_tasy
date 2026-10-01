@@ -5,5 +5,5 @@ Módulo utils do Cliente Operador Tasy
 Contém constantes, utilitários do sistema e funções auxiliares
 """
 
-__version__ = "1.5.2"
+__version__ = "1.5.5"
 __author__ = "Núcleo de Tecnologia da Informação - Hospital São Vicente"

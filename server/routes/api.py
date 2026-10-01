@@ -4,7 +4,9 @@
 
 from flask import Blueprint, request, jsonify
 import logging
-from config import config
+from datetime import datetime, timedelta
+from core.config import config
+from core.auth import login_required, admin_required
 
 # Logger
 logger = logging.getLogger("TasyServerCentral")
@@ -25,6 +27,7 @@ def init_api(database, socket_io, operators):
     connected_operators = operators
 
 @api_bp.route('/operadores', methods=['GET'])
+@login_required
 def get_operadores():
     """Retorna a lista de todos os operadores cadastrados"""
     try:
@@ -36,15 +39,27 @@ def get_operadores():
                 op['status'] = op_data.get('status', 'Conectado')
                 op['ultima_atualizacao'] = op_data.get('ultima_atualizacao')
                 op['hostname'] = op_data.get('system_info', {}).get('hostname')
+                op['os'] = op_data.get('system_info', {}).get('os')
                 op['ip'] = op_data.get('ip')
                 op['saude'] = op_data.get('saude')
                 op['nivel_saude'] = op_data.get('nivel_saude', 'Normal')
+                # Versão/voz/idioma já vêm do banco (persistidos no registro);
+                # se o agente online informou algo, o valor vivo prevalece.
+                for chave in ('versao', 'voz', 'idioma'):
+                    if op_data.get(chave) is not None:
+                        op[chave] = op_data.get(chave)
+            else:
+                # Offline: sem conexão viva, então mostra o último IP que o
+                # operador usou (persistido em registrar_operador) em vez de
+                # deixar o campo vazio.
+                op['ip'] = op.get('last_ip')
         return jsonify({'success': True, 'operadores': operadores})
     except Exception as e:
         logger.error(f"Erro ao obter operadores: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @api_bp.route('/operadores', methods=['POST'])
+@admin_required
 def add_operador():
     """Adiciona um novo operador"""
     try:
@@ -61,6 +76,7 @@ def add_operador():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @api_bp.route('/operadores/<operador_id>', methods=['GET'])
+@login_required
 def get_operador(operador_id):
     """Obtém informações de um operador específico"""
     try:
@@ -75,13 +91,60 @@ def get_operador(operador_id):
             operador['ultima_atualizacao'] = op_data.get('ultima_atualizacao')
             operador['hostname'] = op_data.get('system_info', {}).get('hostname')
             operador['ip'] = op_data.get('ip')
+        else:
+            operador['ip'] = operador.get('last_ip')
 
         return jsonify({'success': True, 'operador': operador})
     except Exception as e:
         logger.error(f"Erro ao obter operador: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@api_bp.route('/operadores/<operador_id>/eventos', methods=['GET'])
+@login_required
+def get_eventos_operador(operador_id):
+    """Eventos de monitoramento do operador (reinícios e erros) para a visão
+    detalhada. Devolve as listas já separadas e um resumo de contagens 24h.
+
+    As listas em si já vêm recortadas às últimas 24h — mesma janela do
+    resumo — para não acumular histórico indefinidamente (um evento antigo
+    só sumia quando 15 mais novos o empurravam pra fora, o que numa unidade
+    com pouco movimento podia levar dias).
+
+    O dados_json de cada evento é devolvido já desserializado em 'dados'.
+    """
+    try:
+        import json as _json
+        def _preparar(lista):
+            saida = []
+            for ev in lista:
+                d = dict(ev)
+                if d.get('dados_json'):
+                    try:
+                        d['dados'] = _json.loads(d['dados_json'])
+                    except Exception:
+                        d['dados'] = None
+                d.pop('dados_json', None)
+                saida.append(d)
+            return saida
+
+        desde_24h = (datetime.now() - timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S')
+        reinicios = _preparar(db.listar_eventos(operador_id, tipo='reinicio', limite=15, desde=desde_24h))
+        erros = _preparar(db.listar_eventos(operador_id, tipo='erro', limite=15, desde=desde_24h))
+        return jsonify({
+            'success': True,
+            'reinicios': reinicios,
+            'erros': erros,
+            'resumo': {
+                'reinicios_24h': db.contar_eventos_recentes(operador_id, 'reinicio', 24),
+                'erros_24h': db.contar_eventos_recentes(operador_id, 'erro', 24),
+            }
+        })
+    except Exception as e:
+        logger.error(f"Erro ao obter eventos do operador: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @api_bp.route('/operadores/<operador_id>', methods=['PUT'])
+@admin_required
 def update_operador(operador_id):
     """Atualiza as informações de um operador"""
     try:
@@ -105,6 +168,7 @@ def update_operador(operador_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @api_bp.route('/operadores/<operador_id>', methods=['DELETE'])
+@admin_required
 def delete_operador(operador_id):
     """Remove um operador"""
     try:
@@ -131,6 +195,9 @@ def delete_operador(operador_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @api_bp.route('/operadores/<operador_id>/comando', methods=['POST'])
+@login_required   # Operador PODE comandar painéis (iniciar/parar/reiniciar);
+                  # o que continua restrito a admin é o CADASTRO de operadores
+                  # e o gerenciamento de usuários.
 def enviar_comando(operador_id):
     """Envia um comando para um operador específico"""
     try:
@@ -154,6 +221,7 @@ def enviar_comando(operador_id):
 
 
 @api_bp.route('/servidor/config', methods=['GET'])
+@login_required
 def get_server_config():
     """Retorna a configuração atual do servidor."""
     try:
@@ -174,6 +242,7 @@ import subprocess
 import time
 
 @api_bp.route('/servidor/saude', methods=['GET'])
+@login_required
 def get_server_health():
     """
     Retorna métricas de saúde do servidor Ubuntu:

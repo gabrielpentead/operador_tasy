@@ -49,15 +49,27 @@ painel-senhas-automacao/
 │   └── tasy_operador_modular.py # 🚀 Entry point do cliente
 │
 └── server/                    # 🖥️ SERVIDOR CENTRAL
-    ├── routes/                # 🌐 Rotas da API e handlers WebSocket
-    ├── static/                # 🎨 Arquivos CSS, JS e imagens
-    ├── templates/             # 📄 Templates HTML (Jinja2)
+    ├── core/                  # 🎯 Módulos centrais
+    │   ├── app.py             #    Fábrica da aplicação Flask + SocketIO
+    │   ├── config.py          #    Configuração (arquivo + variáveis de ambiente)
+    │   ├── auth.py            #    Autenticação, sessão e usuários
+    │   ├── database.py        #    Acesso ao banco (SQLite) e migrações
+    │   └── email_service.py   #    Envio de e-mail (SMTP)
+    ├── routes/                # 🌐 Rotas: api, auth_api, alertas_api, health_api, views, websocket
+    ├── monitoring/            # 🚨 Detecção de incidentes e alertas por e-mail
+    │   ├── incident_detector.py  # correlação por unidade (pelos painéis)
+    │   ├── tasy_host_monitor.py  # disponibilidade do host do Tasy
+    │   ├── alert_mailer.py       # montagem/envio dos alertas
+    │   └── incident_store.py     # trilha de auditoria dos incidentes
+    ├── frontend/              # ⚛️ App React (Vite) — código-fonte da interface
+    ├── static/app/            # 📦 Build do frontend servido em produção (npm run build)
+    ├── static/                # 🎨 CSS/JS/imagens (style.css, logo)
     ├── utils/                 # 🛠️ Utilitários do servidor (logging)
-    ├── app.py                 # Aplicação principal Flask
-    ├── config.py              # Módulo de configuração
-    ├── database.py            # Gerenciamento do banco de dados
+    ├── data/                  # 🔒 Banco e server_config.json (NÃO versionado)
+    ├── .env.example           # 📝 Referência de todas as variáveis de ambiente
     ├── requirements.txt       # Dependências Python do servidor
-    └── run.py                 # 🚀 Entry point do servidor
+    ├── run.py                 # 🚀 Entry point do servidor
+    └── testar_local.py        # 🧪 Sobe o servidor com SMTP de captura (dev)
 ```
 
 ## 🚀 Guia de Instalação e Execução
@@ -84,11 +96,26 @@ painel-senhas-automacao/
     ```bash
     pip install -r requirements.txt
     ```
-4.  Execute o servidor:
+4.  (Opcional) Configure o servidor. A maioria dos parâmetros vem de
+    `data/server_config.json`; segredos e ajustes finos podem vir de variáveis
+    de ambiente. Veja **`.env.example`** para a lista completa (SMTP, monitor do
+    Tasy, alertas). Segredos como `TASY_SMTP_SENHA` devem ficar só no ambiente
+    (ex.: `setx TASY_SMTP_SENHA "..."`), nunca em arquivo versionado.
+5.  Execute o servidor:
     ```bash
     python run.py
     ```
-    O servidor estará acessível em `http://<seu-ip-local>:5000`.
+    O servidor estará acessível em `http://<seu-ip-local>:5000` e a interface em `/app`.
+
+**Interface (React):** o código-fonte fica em `server/frontend/`. Para gerar a
+versão servida em produção (`server/static/app/`):
+```bash
+cd server/frontend
+npm install
+npm run build
+```
+No deploy, leve também o `server/static/app/` gerado. **Nunca copie `server/data/`**
+(contém o banco e as credenciais reais).
 
 ### 💻 Cliente Operador
 
@@ -132,10 +159,8 @@ O cliente foi projetado para ser distribuído como um único arquivo `.exe`.
     1.  Verifique se o terminal do cliente consegue acessar o IP e a porta do servidor (use o comando `ping <ip-do-servidor>`).
     2.  Abra o arquivo `config.ini` (localizado na mesma pasta do `.exe`) e verifique se o `host` e a `porta` na seção `[servidor]` estão corretos.
 
-### Erro de Migração do Banco de Dados (Servidor)
-- **Causa:** O servidor foi atualizado para uma nova versão que requer uma estrutura de banco de dados diferente.
-- **Solução:** Navegue até a pasta `server` e execute o script de migração:
-    ```bash
-    python migrate_db.py
-    ```
+### Banco de Dados (Servidor)
+- As migrações de esquema são **automáticas**: ao iniciar, `core/database.py` verifica
+  as tabelas/colunas e aplica o que faltar (`_verificar_migracao`), sem script manual.
+- Em caso de banco corrompido, restaure a partir de um backup em `data/` e reinicie o servidor.
     Após a migração, reinicie o servidor.

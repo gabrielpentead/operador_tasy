@@ -3,6 +3,85 @@ from typing import Optional
 
 logger = logging.getLogger("TasyOperador.VoiceManager")
 
+# Espelham exatamente os literais usados dentro de VoiceManager.speak(): o nome da
+# voz e o lang do utterance. Existem só para o operador PODER REPORTAR ao servidor
+# qual voz/idioma está em uso (monitoramento), sem que nada leia estas constantes
+# no caminho da fala. Se algum dia o literal em speak() mudar, atualizar aqui junto.
+DEFAULT_VOICE_NAME = "Microsoft Francisca Online (Natural) - Portuguese (Brazil)"
+DEFAULT_VOICE_LANG = "pt-BR"
+
+
+# Script injetado UMA vez no documento do painel. Corrige o utterance das chamadas
+# de senha do TASY (AtePacSEVoice.speak), que não é nosso código.
+#
+# POR QUE EXISTE: a partir do Edge 153 o catálogo da Microsoft passou a expor a
+# "Microsoft Thalita multilíngue Online (Natural) - Portuguese (Brazil)". O Tasy
+# escolhe essa voz e NÃO define `lang` no utterance. Sendo multilíngue, ela detecta
+# o idioma pelo próprio texto e erra: nomes de paciente saem em inglês/espanhol.
+# Medido em campo (monitor_falas, 14/09/2026): 110 chamadas com voz=Thalita e
+# lang=(vazio); as 3 falas do operador, com voz e lang explícitos, saíram corretas.
+#
+# POR QUE TROCA A VOZ em vez de só preencher o lang: testado no painel afetado —
+# com a Thalita, definir lang='pt-BR' NÃO corrige (continua em inglês). Só a troca
+# por uma voz não-multilíngue resolve. Não é suposição, é medição.
+#
+# SEGURANÇA: o ajuste roda dentro de try/catch e a chamada original é SEMPRE
+# repassada. Uma falha aqui nunca pode calar uma chamada de paciente.
+# Só age quando a voz é multilíngue ou não foi definida; caso contrário não toca
+# em nada — se o Tasy passar a escolher direito, este script fica inerte.
+_CORRECAO_PTBR_JS = r"""
+(function () {
+  try {
+    var synth = window.speechSynthesis;
+    if (!synth || typeof synth.speak !== 'function') return 'sem-speechSynthesis';
+    if (window.__correcaoPtBrInstalada === true) return 'ja-instalado';
+
+    var MULTILINGUE = /multiling|multilíng/i;
+    var PREFERIDAS = [
+      'Microsoft Francisca Online (Natural) - Portuguese (Brazil)',
+      'Microsoft Antônio Online (Natural) - Portuguese (Brazil)',
+      'Microsoft Maria - Portuguese (Brazil)',
+      'Microsoft Daniel - Portuguese (Brazil)'
+    ];
+
+    function escolherVoz() {
+      var vs = synth.getVoices() || [];
+      for (var i = 0; i < PREFERIDAS.length; i++) {
+        for (var j = 0; j < vs.length; j++) {
+          if (vs[j].name === PREFERIDAS[i]) return vs[j];
+        }
+      }
+      // Nenhuma das preferidas: qualquer pt-BR que nao seja multilingue.
+      for (var k = 0; k < vs.length; k++) {
+        if ((vs[k].lang || '').toLowerCase().indexOf('pt-br') === 0
+            && !MULTILINGUE.test(vs[k].name || '')) return vs[k];
+      }
+      return null;
+    }
+
+    var original = synth.speak.bind(synth);
+    synth.speak = function (u) {
+      try {
+        if (u) {
+          if (!u.lang) u.lang = 'pt-BR';
+          if (!u.voice || MULTILINGUE.test(u.voice.name || '')) {
+            var boa = escolherVoz();
+            if (boa) u.voice = boa;
+          }
+        }
+      } catch (e) { /* jamais impedir a fala */ }
+      return original(u);
+    };
+
+    window.__correcaoPtBrInstalada = true;
+    return 'instalado';
+  } catch (e) {
+    return 'erro: ' + (e && e.message ? e.message : String(e));
+  }
+})();
+"""
+
+
 class VoiceManager:
     """Gerenciador de síntese de voz simplificado usando a voz padrão do browser."""
     
@@ -10,8 +89,38 @@ class VoiceManager:
         self.driver = driver
         
     def set_driver(self, driver):
-        """Define o driver do navegador."""
+        """Define o driver do navegador e instala a correção de voz das chamadas."""
         self.driver = driver
+        self.garantir_voz_ptbr()
+
+    def garantir_voz_ptbr(self) -> bool:
+        """Instala, uma vez por documento, a correção de voz das chamadas do Tasy.
+
+        Idempotente e barata: se já estiver instalada, o script devolve
+        'ja-instalado' e não faz nada. Chamada em set_driver() e no início de
+        speak(), o que cobre o ciclo normal da automação.
+
+        Se o documento for recarregado de fato, o gancho se perde — mas nesse
+        cenário a automação também perde as referências dos elementos,
+        `_is_healthy()` falha e o restart existente recria o navegador,
+        reinstalando a correção. Por isso não há reinjeção periódica aqui.
+
+        NUNCA levanta exceção: falhar em instalar não pode derrubar a automação.
+        """
+        if not self.driver:
+            return False
+        try:
+            resultado = self.driver.execute_script(_CORRECAO_PTBR_JS)
+        except Exception as e:
+            logger.warning(f"🔊 Correção de voz não pôde ser instalada (não crítico): {e}")
+            return False
+
+        if resultado == 'instalado':
+            logger.info("🔊 Correção de voz pt-BR instalada no painel "
+                        "(troca voz multilíngue do Tasy por voz pt-BR comum).")
+        elif resultado != 'ja-instalado':
+            logger.warning(f"🔊 Correção de voz não instalada: {resultado}")
+        return resultado in ('instalado', 'ja-instalado')
 
     def speak(self, text: str) -> bool:
         """
@@ -36,6 +145,11 @@ class VoiceManager:
         try:
             if not self.driver or not text.strip():
                 return False
+
+            # Reforça a correção de voz das chamadas do Tasy. Idempotente: se já
+            # estiver instalada não faz nada. Fica aqui porque speak() é chamado
+            # depois do login, quando a página do painel já está montada.
+            self.garantir_voz_ptbr()
 
             clean_text = text.strip().replace('\\', '\\\\').replace('`', '\\`').replace('${', '\\${').replace('\n', ' ')
             default_voice_name = "Microsoft Francisca Online (Natural) - Portuguese (Brazil)"

@@ -6,7 +6,7 @@ Script para criar executável do sistema modular
 
 Autor: Núcleo de Tecnologia da Informação - Hospital São Vicente
 Data: 21/04/2026
-Versão: 1.5.2
+Versão: 1.5.5
 """
 
 import os
@@ -180,6 +180,13 @@ a = Analysis(
         'selenium.webdriver.edge',
         'selenium.webdriver.edge.service',
         'selenium.webdriver.edge.options',
+        # Selenium 4.44 carrega o Edge por import tardio (__getattr__). Sem
+        # listar o webdriver explicitamente, o PyInstaller não o empacota e a
+        # automação quebra em runtime com "No module named
+        # selenium.webdriver.edge.webdriver".
+        'selenium.webdriver.edge.webdriver',
+        'selenium.webdriver.remote.webdriver',
+        'selenium.webdriver.common.service',
         'psutil',
         'requests',
         'configparser',

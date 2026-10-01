@@ -2,10 +2,46 @@
 # -*- coding: utf-8 -*-
 # server/routes/websocket.py - Eventos WebSocket para comunicação em tempo real
 
+import json
 from flask import request
 from flask_socketio import emit
 from datetime import datetime
-from config import config as server_config
+from core.config import config as server_config
+
+
+def _automacao_ativada(status) -> bool:
+    """Confirma que a automação terminou de subir: procura 'ativado' no texto
+    do status (cobre Monitor ou Totem, e tolera pequenas variações de
+    escrita) — nem exige a frase exata (frágil, nunca bate se o texto variar
+    um pouco) nem aceita qualquer status que não seja 'parado' (frouxo
+    demais: estados intermediários tipo 'Iniciando...' também não são
+    'parado', mas a automação ainda não terminou de subir — usar esse
+    critério fazia a contagem parar cedo demais, com tempos de uns 13s em vez
+    dos ~60-90s reais)."""
+    def _tem_ativado(texto):
+        return isinstance(texto, str) and 'ativado' in texto.lower()
+
+    if isinstance(status, dict):
+        return _tem_ativado(status.get('monitor')) or _tem_ativado(status.get('totem'))
+    return _tem_ativado(status)
+
+
+def _agente_mede_rto(versao) -> bool:
+    """True se o agente é ≥ 1.5.7 — versão em que o operador mede o RTO por
+    conta própria (espera o painel ficar operacional antes de reportar) e manda
+    o resultado + duracao_s corretos.
+
+    Nesses, o servidor NÃO deve recontar o tempo: como o agente só envia o
+    evento com o painel já 'ativado', a recontagem mediria apenas o intervalo
+    evento→status (~2-3s) e sobrescreveria a duração real (ex.: 87s → 3s).
+    Agentes antigos (que reportavam no início do reinício, ou mandavam durações
+    absurdas) seguem com a medição feita pelo servidor.
+    """
+    try:
+        partes = tuple(int(x) for x in str(versao).split('.')[:3])
+        return partes >= (1, 5, 7)
+    except (TypeError, ValueError, AttributeError):
+        return False
 
 
 def _classificar_saude(saude: dict) -> str:
@@ -50,9 +86,23 @@ def _gerar_motivos_alerta(saude: dict, nivel: str) -> list:
     return motivos
 
 
-def register_websocket_handlers(socketio, db, connected_operators, logger):
-    """Registra todos os handlers de eventos WebSocket"""
-    
+def register_websocket_handlers(socketio, db, connected_operators, logger, incident_detector=None):
+    """Registra todos os handlers de eventos WebSocket.
+
+    incident_detector (opcional): camada de monitoramento. Os handlers só o
+    NOTIFICAM (chamadas rápidas, não-bloqueantes, à prova de exceção); toda a
+    lógica pesada roda no worker do detector. Se for None, nada muda.
+    """
+
+    def _notificar(metodo, *args):
+        """Notifica o detector sem jamais deixar um erro dele afetar o WebSocket."""
+        if incident_detector is None:
+            return
+        try:
+            getattr(incident_detector, metodo)(*args)
+        except Exception:
+            pass
+
     @socketio.on('connect')
     def handle_connect():
         """Manipula a conexão de um cliente WebSocket"""
@@ -126,10 +176,16 @@ def register_websocket_handlers(socketio, db, connected_operators, logger):
                     emit('erro', {'mensagem': 'Operador não encontrado e dados insuficientes para cadastro'})
                     return
             else:
-                # Se já existe, atualiza as informações com o que veio do cliente (Sincronização)
+                # Se já existe, atualiza as informações com o que veio do cliente (Sincronização).
+                #
+                # 'nome' fica de fora de propósito: é o admin quem define o
+                # nome pelo painel do servidor, e esse é o dado autoritativo.
+                # Incluir 'nome' aqui fazia o valor que o agente ainda tinha
+                # em cache local (de antes de uma renomeação) sobrescrever o
+                # banco a cada reconexão/heartbeat — a edição feita no painel
+                # ficava "voltando" para o nome antigo.
                 if 'tipo_cadastro' in data:
                     update_data = {
-                        'nome': nome,
                         'tipo_cadastro': data.get('tipo_cadastro'),
                         'usa_credenciais_separadas': data.get('usa_credenciais_separadas'),
                         'username_monitor': data.get('username_monitor'),
@@ -143,19 +199,44 @@ def register_websocket_handlers(socketio, db, connected_operators, logger):
             # Juntar o operador a uma sala específica para ele
             socketio.server.enter_room(request.sid, operador_id)
             
+            # Metadados de monitoramento (versão do agente, voz e idioma).
+            # Chegam no registro; guardamos em memória para o dashboard e
+            # persistimos para aparecerem mesmo com o operador offline.
+            versao = data.get('versao')
+            voz = data.get('voz')
+            idioma = data.get('idioma')
+
             # Registrar operador como conectado
+            nome_operador = operador.get('nome') or nome or f'Operador-{operador_id[:8]}'
             connected_operators[operador_id] = {
                 'sid': request.sid,
                 'status': 'Conectado',
                 'ultima_atualizacao': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'ip': request.remote_addr
+                'ip': request.remote_addr,
+                'versao': versao,
+                'voz': voz,
+                'idioma': idioma,
+                'nome': nome_operador,
             }
-            
-            logger.info(f"Operador registrado/sincronizado: {operador_id} - {nome}")
-            
-            # Enviar configurações atuais para o operador (Confirmar sync)
+
+            if versao or voz or idioma:
+                db.atualizar_metadados_operador(operador_id, versao=versao, voz=voz, idioma=idioma)
+
+            # Persiste o IP desta conexão — é o que sobrevive depois que o
+            # operador cair, para a tela de detalhes mostrar o último IP
+            # conhecido em vez de "N/A" quando ele está offline.
+            db.atualizar_conexao_operador(operador_id, ip=request.remote_addr)
+
+            logger.info(f"Operador registrado/sincronizado: {operador_id} - {nome_operador}"
+                        + (f" (agente v{versao})" if versao else ""))
+
+            # Enviar configurações atuais para o operador (Confirmar sync).
+            # 'nome' vai junto para o agente poder atualizar o que exibe
+            # localmente com o valor autoritativo do servidor, em vez de
+            # ficar preso ao nome que tinha em cache antes de uma renomeação.
             emit('config_atualizada', {
                 'username': operador['username'], # Retorna o que está no banco (pode ser placeholder se acabou de criar)
+                'nome': nome_operador,
                 'tipo_cadastro': operador.get('tipo_cadastro', 'Monitor de Senhas'),
                 'usa_credenciais_separadas': operador.get('usa_credenciais_separadas')
             })
@@ -163,10 +244,13 @@ def register_websocket_handlers(socketio, db, connected_operators, logger):
             # Notificar todos os clientes que o operador está online
             socketio.emit('status_operador', {
                 'id': operador_id,
+                'nome': nome_operador,
                 'online': True,
                 'status': 'Conectado',
                 'ultima_atualizacao': connected_operators[operador_id]['ultima_atualizacao']
             })
+
+            _notificar('notify_online', operador_id)
         except Exception as e:
             logger.error(f"Erro ao registrar operador: {str(e)}")
             emit('erro', {'mensagem': f'Erro ao registrar: {str(e)}'})
@@ -194,6 +278,21 @@ def register_websocket_handlers(socketio, db, connected_operators, logger):
                 
                 if 'status' in data:
                     connected_operators[operador_id]['status'] = data['status']
+
+                    # Confirma um reinício pendente deste operador, se houver:
+                    # é aqui — no primeiro status que confirmar a automação
+                    # ativada, não no instante do próprio evento de reinício —
+                    # que sabemos de verdade quanto tempo ela levou pra subir.
+                    pendente = connected_operators[operador_id].get('reinicio_pendente')
+                    if pendente and _automacao_ativada(data['status']):
+                        duracao_s = int((datetime.now() - pendente['desde']).total_seconds())
+                        db.finalizar_reinicio(pendente['evento_id'], 'sucesso', {
+                            'fim': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'duracao_s': duracao_s,
+                        })
+                        del connected_operators[operador_id]['reinicio_pendente']
+                        socketio.emit('eventos_atualizados', {'id': operador_id, 'novos': 1})
+
                     # Se o status mudou, aí sim atualizamos o banco para garantir sincronia, mas sem floodar o log se for só heartbeat
                     update_data = {
                         'last_ip': current_ip,
@@ -214,6 +313,7 @@ def register_websocket_handlers(socketio, db, connected_operators, logger):
                 # Notificar todos os clientes sobre a atualização de status (Socket.IO é eficiente para isso)
                 status_payload = {
                     'id': operador_id,
+                    'nome': connected_operators[operador_id].get('nome'),
                     'online': True,
                     'status': connected_operators[operador_id].get('status'),
                     'hostname': connected_operators[operador_id].get('system_info', {}).get('hostname'),
@@ -284,6 +384,7 @@ def register_websocket_handlers(socketio, db, connected_operators, logger):
 
             socketio.emit('saude_atualizada', {
                 'id':      operador_id,
+                'nome':    connected_operators[operador_id].get('nome'),
                 'saude':   saude,
                 'nivel':   nivel,
                 'motivos': motivos,
@@ -295,6 +396,112 @@ def register_websocket_handlers(socketio, db, connected_operators, logger):
             )
         except Exception as e:
             logger.error(f"Erro ao processar saúde do operador: {e}")
+
+    @socketio.on('evento_operador')
+    def handle_evento_operador(data):
+        """Recebe eventos de monitoramento do agente (reinícios e erros).
+
+        O agente pode mandar um evento único ou um lote (lista em 'eventos').
+        Persistimos e reemitimos ao dashboard para atualização ao vivo.
+        """
+        try:
+            operador_id = data.get('id') or data.get('operator_id')
+            if not operador_id:
+                return
+
+            eventos = data.get('eventos')
+            if not isinstance(eventos, list):
+                # evento único no próprio payload
+                eventos = [data]
+
+            gravados = 0
+            for ev in eventos:
+                tipo = ev.get('tipo')
+                if tipo not in ('reinicio', 'erro'):
+                    continue
+                dados = ev.get('dados')
+                nivel = ev.get('nivel')
+                confia_agente = False   # agente ≥1.5.7 mede o RTO sozinho (definido abaixo)
+
+                # Alimenta o detector de incidentes (não-bloqueante). Só o
+                # reinício de 'Recuperação automática' e o erro de conexão do
+                # Tasy interessam; o detector filtra o resto.
+                if tipo == 'reinicio':
+                    # O agente pode mandar mais de um evento pro MESMO
+                    # reinício (ex.: um ao detectar/iniciar, outro ao concluir
+                    # do lado dele). Se já existe um pendente deste operador,
+                    # este evento é continuação — mescla os dados no registro
+                    # existente em vez de abrir uma linha nova (isso já
+                    # fragmentou um único reinício em duas linhas antes).
+                    pendente = connected_operators.get(operador_id, {}).get('reinicio_pendente')
+                    if pendente:
+                        if dados:
+                            db.mesclar_dados_reinicio(pendente['evento_id'], dados)
+                        continue
+
+                    # Agente ≥ 1.5.7 mede o RTO por conta própria e só reporta
+                    # com o painel JÁ operacional: confiamos no resultado +
+                    # duracao_s dele e NÃO recontamos no servidor (a recontagem
+                    # mediria só o intervalo evento→status ~3s e sobrescreveria
+                    # a duração real). Agente antigo: mantém a medição do servidor.
+                    versao_ag = connected_operators.get(operador_id, {}).get('versao')
+                    confia_agente = _agente_mede_rto(versao_ag) and nivel in ('sucesso', 'falha')
+
+                    if not confia_agente:
+                        # O servidor conta o tempo por conta própria — desde que
+                        # recebeu este evento até confirmar que a automação
+                        # ativou de verdade — porque o agente antigo não é
+                        # confiável (já veio duração absurda, tipo 180min).
+                        nivel = 'pendente'
+
+                    # Se este reinício foi disparado pelo agendador do servidor
+                    # (Configurações > Reinícios), o agente reporta o mesmo
+                    # título genérico que usa para o comando manual do
+                    # dashboard — os dois chegam nele como o mesmo evento de
+                    # socket, sem distinção. O agendador marca a flag abaixo
+                    # logo antes de emitir; aqui trocamos o rótulo antes de
+                    # salvar, para o histórico não misturar as duas origens.
+                    origem = connected_operators.get(operador_id, {}).pop('origem_comando_pendente', None)
+                    if (origem and origem.get('origem') == 'agendado' and
+                            (datetime.now() - origem['desde']).total_seconds() <= db.TIMEOUT_REINICIO_PENDENTE_S):
+                        ev = dict(ev, titulo='Agendamento diário')
+                        if isinstance(dados, dict):
+                            dados = dict(dados, motivo='Agendamento diário')
+
+                    _notificar('notify_reinicio', operador_id,
+                               (dados or {}).get('motivo'))
+                elif tipo == 'erro':
+                    _notificar('notify_erro', operador_id,
+                               ev.get('titulo'), ev.get('detalhe'))
+
+                dados_json = json.dumps(dados, ensure_ascii=False) if dados is not None else None
+                evento_id = db.registrar_evento(
+                    operador_id,
+                    tipo=tipo,
+                    ocorrido_em=ev.get('ocorrido_em') or datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    nivel=nivel,
+                    titulo=ev.get('titulo'),
+                    detalhe=ev.get('detalhe'),
+                    dados_json=dados_json)
+                if evento_id:
+                    gravados += 1
+                    # Só marca 'pendente' (p/ o servidor recontar depois) quando
+                    # NÃO confia no agente. Com agente ≥1.5.7 o evento já vem
+                    # final (sucesso/falha + duracao_s real) e não deve ser
+                    # sobrescrito por uma recontagem no handle_atualizar_status.
+                    if (tipo == 'reinicio' and not confia_agente
+                            and operador_id in connected_operators):
+                        connected_operators[operador_id]['reinicio_pendente'] = {
+                            'evento_id': evento_id,
+                            'desde': datetime.now(),
+                        }
+
+            if gravados:
+                # Avisa o dashboard que há eventos novos para este operador
+                socketio.emit('eventos_atualizados', {'id': operador_id, 'novos': gravados})
+                logger.debug(f"Eventos do operador {operador_id} gravados: {gravados}")
+        except Exception as e:
+            logger.error(f"Erro ao processar evento do operador: {e}")
 
     @socketio.on('disconnect')
     def handle_disconnect():
@@ -308,15 +515,26 @@ def register_websocket_handlers(socketio, db, connected_operators, logger):
                     break
             
             if operador_id:
+                # Se caiu com um reinício ainda pendente, ele nunca vai
+                # confirmar — fecha como falha em vez de deixar "Iniciado"
+                # parado pra sempre.
+                pendente = connected_operators.get(operador_id, {}).get('reinicio_pendente')
+                if pendente:
+                    db.finalizar_reinicio(pendente['evento_id'], 'falha')
+                    socketio.emit('eventos_atualizados', {'id': operador_id, 'novos': 1})
+
                 # Remover operador da lista de conectados
+                nome_operador = connected_operators.get(operador_id, {}).get('nome')
                 connected_operators.pop(operador_id, None)
 
                 # Notificar todos os clientes que o operador está offline
                 socketio.emit('status_operador', {
                     'id': operador_id,
+                    'nome': nome_operador,
                     'online': False
                 })
-                
+
+                _notificar('notify_offline', operador_id)
                 logger.info(f"Operador desconectado: {operador_id}")
         except Exception as e:
             logger.error(f"Erro ao processar desconexão: {str(e)}")
@@ -344,20 +562,25 @@ def register_websocket_handlers(socketio, db, connected_operators, logger):
                 operador = db.get_operador(operador_id)
                 if operador:
                     logger.info(f"Operador {operador_id} reconectado via heartbeat")
-                    
+
                     # Adicionar novamente à lista de conectados
+                    nome_operador = operador.get('nome') or f'Operador-{operador_id[:8]}'
                     connected_operators[operador_id] = {
                         'sid': request.sid,
                         'status': 'Reconectado',
-                        'ultima_atualizacao': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        'ultima_atualizacao': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'ip': request.remote_addr,
+                        'nome': nome_operador,
                     }
-                    
+                    db.atualizar_conexao_operador(operador_id, ip=request.remote_addr)
+
                     # Juntar à sala novamente
                     socketio.server.enter_room(request.sid, operador_id)
-                    
+
                     # Notificar todos os clientes que o operador está online novamente
                     socketio.emit('status_operador', {
                         'id': operador_id,
+                        'nome': nome_operador,
                         'online': True,
                         'status': 'Reconectado',
                         'ultima_atualizacao': connected_operators[operador_id]['ultima_atualizacao']

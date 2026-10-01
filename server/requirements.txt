@@ -10,3 +10,4 @@ click==8.1.7
 dnspython==2.6.1
 # eventlet removido — incompatível com Python 3.14+ (_thread.start_joinable_thread inexistente)
 email_validator==2.1.1
+psutil==7.2.2

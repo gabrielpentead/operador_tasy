@@ -291,7 +291,7 @@ class OperadorApp(App):
     """
 
     TITLE = "Automação da Continuidade Operacional de Painéis"
-    SUB_TITLE = "v1.5.2"
+    SUB_TITLE = "v1.5.5"
 
     BINDINGS = [
         ("d", "toggle_dark", "Alternar Modo Escuro"),

@@ -54,8 +54,8 @@ def exibir_banner():
 sys.path.append(str(Path(__file__).parent))
 
 # Importar aplicação
-from app import create_app
-from config import config
+from core.app import create_app
+from core.config import config
 
 logger = logging.getLogger("TasyServerCentral")
 logging.basicConfig(level=logging.INFO)
@@ -134,7 +134,8 @@ def main():
         host=args.host,
         port=args.port,
         debug=config.server.debug,
-        use_reloader=config.server.debug
+        use_reloader=config.server.debug,
+        allow_unsafe_werkzeug=True
     )
 
     return 0

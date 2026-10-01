@@ -8,7 +8,7 @@ import socket
 import platform
 
 # === INFORMAÇÕES DO SISTEMA ===
-VERSION = "1.5.2"
+VERSION = "1.5.8"
 HOSTNAME = socket.gethostname()
 SYSTEM_INFO = f"{platform.system()} {platform.release()}"
 
@@ -23,6 +23,14 @@ HEARTBEAT_INTERVAL = 25
 RECONNECTION_DELAY = 5
 MAX_RECONNECTION_DELAY = 60
 CONNECTION_TIMEOUT = 20
+
+# Heartbeat de aplicação (evento 'heartbeat' já existente no servidor). Serve
+# de sinal de vida acima do ping/pong do engine.io: se o 'heartbeat_ack' parar
+# de chegar, o watchdog identifica uma conexão "muda" (zumbi) e força a
+# reconexão — sem reiniciar o operador.
+APP_HEARTBEAT_INTERVAL = 15        # de quanto em quanto tempo mandar o heartbeat
+WATCHDOG_CHECK_INTERVAL = 10       # de quanto em quanto tempo o watchdog verifica
+WATCHDOG_SILENCE_LIMIT = 45        # silêncio máximo tolerado antes de forçar reconexão
 
 # === STATUS DO OPERADOR ===
 STATUS_DISCONNECTED = "desconectado"
@@ -53,6 +61,13 @@ AUTOMATION_PORT_TOTEM = 9223
 # === CONFIGURAÇÕES DE AUTOMAÇÃO ===
 ERROR_CHECK_INTERVAL = 5 # 5 segundos para detecção rápida
 BROWSER_STARTUP_WAIT = 7
+
+# Tempo máximo (s) que uma recuperação/reinício tem para chegar ao estado
+# OPERACIONAL (Tasy carregado e monitor ativado). Serve para medir o RTO e o
+# resultado (sucesso/falha) do reinício pelo estado REAL do painel, e não por um
+# retrato prematuro logo após subir a thread.
+RTO_TIMEOUT_S = 120
+RTO_POLL_S = 1
 
 # === SELETORES TASY ===
 # (Adicionar seletores comuns aqui para facilitar manutenção)

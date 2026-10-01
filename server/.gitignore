@@ -40,5 +40,15 @@ ENV/
 .DS_Store
 
 # Diretório de dados
-data/ 
+data/
 .venv/
+
+# Variáveis de ambiente reais (o template .env.example fica versionado)
+.env
+
+# Backups/temporários de edição
+*.antes_*
+*.antes-*
+*.bak
+*.orig
+*.corrompido

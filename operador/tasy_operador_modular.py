@@ -8,7 +8,7 @@ Entry point principal que usa a nova arquitetura modular com interface Textual.
 
 Autor: Núcleo de Tecnologia da Informação - Hospital São Vicente
 Data: 21/04/2026
-Versão: 1.5.2
+Versão: 1.5.5
 """
 
 import sys

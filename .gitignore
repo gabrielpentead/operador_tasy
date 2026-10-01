@@ -1,0 +1,41 @@
+# ─── Segredos e dados reais — NUNCA versionar ───────────────────────────
+**/.env
+**/config.ini
+**/config.ini.bak
+server/data/*.db
+server/data/server_config.json
+server/data/server_config.json.bak
+# chaves/certificados, por garantia
+*.pem
+*.key
+id_ed25519*
+
+# ─── Dependências ───────────────────────────────────────────────────────
+**/node_modules/
+**/.venv/
+venv/
+
+# ─── Artefatos de build Python / PyInstaller ────────────────────────────
+**/__pycache__/
+*.pyc
+*.pyo
+operador/build/
+operador/dist/
+
+# ─── Logs e temporários ─────────────────────────────────────────────────
+**/logs/
+*.log
+*.tmp
+
+# ─── Sistema operacional / editores ─────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+
+# Observação: server/static/app/ (build do frontend Vite) É versionado de
+# propósito — é o que o servidor serve; manter no repo deixa o servidor
+# executável sem passo de build. O código-fonte do frontend fica em
+# server/frontend/src/.
+
+# Backups de deploy do frontend (gerados ao subir no servidor)
+server/static/app.bak*/

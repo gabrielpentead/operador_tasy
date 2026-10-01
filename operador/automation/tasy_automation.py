@@ -5,6 +5,7 @@ Automação do sistema Tasy para o Cliente Operador
 """
 
 import time
+import base64
 import logging
 import threading
 from typing import Optional, Dict, Any
@@ -27,7 +28,7 @@ class TasyAutomation:
 
     def __init__(self, usuario: str, senha: str, codigo_maquina: str, automation_type: str, 
                  tasy_url: str, debug_port: int, monitor_index: Optional[int] = None, 
-                 websocket_client=None, on_status_change=None):
+                 websocket_client=None, on_status_change=None, config=None):
         self.usuario = usuario
         self.senha = senha
         self.codigo_maquina = codigo_maquina
@@ -38,8 +39,13 @@ class TasyAutomation:
         self.websocket_client = websocket_client
         self.on_status_change = on_status_change
 
-        # Instancia o BrowserManager (que agora gerencia o auto-update internamente)
-        self.browser_manager = EdgeBrowserManager()
+        # Recebe o MESMO objeto de configuração do cliente. Sem isso, o
+        # EdgeBrowserManager criava um OperadorConfig próprio, que lia o
+        # config.ini na criação da automação e mantinha essa fotografia em
+        # memória. Como save_config() grava o objeto inteiro, uma atualização
+        # de driver depois de uma troca de senha regravava a senha ANTIGA por
+        # cima da nova — a senha "voltava" sozinha horas depois.
+        self.browser_manager = EdgeBrowserManager(config)
         self.voice_manager = VoiceManager(driver=None)
         
         self.browser_instance: Optional[Dict[str, Any]] = None

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Cliente principal do Operador Tasy - Refatorado para Multi-Automação
-Versão: 1.5.2
+Versão: 1.5.5
 """
 
 import time
@@ -25,8 +25,10 @@ from utils.constants import (
     CADASTRO_MONITOR, CADASTRO_TOTEM, CADASTRO_AMBOS,
     TARGET_MONITOR, TARGET_TOTEM, TARGET_AMBOS,
     AUTOMATION_PORT_MONITOR, AUTOMATION_PORT_TOTEM,
-    HOSTNAME
+    HOSTNAME, VERSION, RTO_TIMEOUT_S, RTO_POLL_S
 )
+from automation.voice_manager import DEFAULT_VOICE_NAME, DEFAULT_VOICE_LANG
+from core.event_reporter import EventReporter, anexar_captura_de_erros
 from utils.system_utils import (get_system_info, get_monitors_info, kill_edge_processes,
                                 reset_application_data, resolve_monitor_indices)
 from automation.browser_manager import EdgeBrowserManager
@@ -52,7 +54,16 @@ class OperadorClient:
         self.running = False
         self.status = STATUS_DISCONNECTED
         self._setup_components()
-        
+
+        # Repórter de eventos de monitoramento (reinícios e erros). Camada
+        # isolada: só observa e envia, nunca interfere na automação. Ver
+        # core/event_reporter.py.
+        self.event_reporter = EventReporter(
+            ws_getter=lambda: self.websocket,
+            id_getter=self.config.get_operator_id,
+        )
+        anexar_captura_de_erros(self.event_reporter)
+
         # Executar verificação e atualização do EdgeDriver UMA ÚNICA VEZ na inicialização
         self._ensure_edgedriver_ready()
 
@@ -235,7 +246,7 @@ class OperadorClient:
             elif command == "parar":
                 self._stop_automation(target=target)
             elif command == "reiniciar":
-                self._restart_automation(target=target)
+                self._restart_automation(target=target, motivo='Comando do servidor')
             else:
                 success = False
                 msg = f"Comando desconhecido: {command}"
@@ -261,7 +272,7 @@ class OperadorClient:
             self.config.update_from_dict(data)
             logger.info("💾 Configurações locais atualizadas.")
             if data.get('reiniciar_automacao') is True:
-                self._restart_automation(target='ambos')
+                self._restart_automation(target='ambos', motivo='Configuração alterada')
 
     def _handle_reset_command(self):
         """Executa o reset total da aplicação solicitado pelo servidor"""
@@ -304,7 +315,13 @@ class OperadorClient:
                 'usa_credenciais_separadas': self.config.get_usa_credenciais_separadas(),
                 'username_monitor': self.config.get_credentials('tasy_monitor')[0],
                 'username_totem': self.config.get_credentials('tasy_totem')[0],
-                'username': self.config.get_credentials('tasy_compartilhado')[0]
+                'username': self.config.get_credentials('tasy_compartilhado')[0],
+                # Metadados só de monitoramento — versão do agente e voz/idioma
+                # em uso. Vão no registro (uma vez por conexão) e não influenciam
+                # em nada o fluxo de automação/login/TTS.
+                'versao': VERSION,
+                'voz': DEFAULT_VOICE_NAME,
+                'idioma': DEFAULT_VOICE_LANG,
             }
             self.websocket.register_operator(extra_data=extra_data)
         except Exception as e:
@@ -391,7 +408,8 @@ class OperadorClient:
                     debug_port=params['port'], 
                     monitor_index=params['index'],
                     websocket_client=self.websocket,
-                    on_status_change=self._handle_automation_status_change
+                    on_status_change=self._handle_automation_status_change,
+                    config=self.config
                 )
                 self.automations[t] = instance
                 thread = threading.Thread(target=instance.run, name=f"AutomacaoThread-{t}", daemon=True)
@@ -426,7 +444,7 @@ class OperadorClient:
                 self.automations.pop(t, None)
                 logger.info(f"   - Instância '{t}' removida do controle.")
 
-    def _restart_automation(self, target: str = 'ambos'):
+    def _restart_automation(self, target: str = 'ambos', motivo: str = None):
         """Reinicia a automação, absorvendo pedidos concorrentes para o mesmo alvo.
 
         Por que a absorção existe: antes, cada pedido de reinício apenas aguardava
@@ -452,15 +470,80 @@ class OperadorClient:
                 return
             self._restarting.update(targets_to_restart)
 
+        # Cronometragem só para o histórico de monitoramento — não altera em
+        # nada a lógica de reinício. Envolvido em try/except no reporte.
+        _inicio = datetime.now()
+        _sucesso = False
         try:
             with self.automation_lock:
                 logger.info(f"🔄 Reiniciando automação para alvo(s): {targets_to_restart}...")
                 self._stop_automation(target=target)
                 time.sleep(5)
                 self._start_automation(target=target)
+            # Sucesso REAL = a automação chegou ao estado OPERACIONAL (Tasy
+            # carregado e monitor "ativado"), não apenas a thread viva. A espera
+            # fica FORA do automation_lock para não travar comandos concorrentes
+            # (o alvo já está protegido de reinícios simultâneos por _restarting).
+            _sucesso = self._aguardar_operacional(targets_to_restart, RTO_TIMEOUT_S)
+            if _sucesso:
+                logger.info(f"✅ Recuperação concluída: {targets_to_restart} operacional(is).")
+            else:
+                logger.warning(f"⚠️ Recuperação de {targets_to_restart} não ficou operacional "
+                               f"em {RTO_TIMEOUT_S}s (ou o Tasy ainda está indisponível).")
         finally:
             with self._restart_lock:
                 self._restarting.difference_update(targets_to_restart)
+            # Reporte do evento — isolado; qualquer falha aqui é engolida e
+            # jamais afeta o reinício que acabou de ocorrer.
+            try:
+                self.event_reporter.registrar_reinicio(
+                    motivo=motivo or 'Reinicialização',
+                    alvo=target,
+                    inicio=_inicio,
+                    fim=datetime.now(),
+                    sucesso=_sucesso,
+                )
+            except Exception:
+                pass
+
+    def _instancia_operacional(self, t) -> bool:
+        """True se o alvo está REALMENTE operacional: thread viva, não crashou e
+        a automação chegou ao estado 'ativado' (Tasy carregado, monitor ativo)."""
+        inst = self.automations.get(t)
+        th = self.automation_threads.get(t)
+        if not inst or not th or not th.is_alive():
+            return False
+        if getattr(inst, 'crashed', False):
+            return False
+        return 'ativado' in str(getattr(inst, 'status', '')).lower()
+
+    def _alvo_falhou(self, t) -> bool:
+        """Falha definitiva do alvo: a thread morreu ou a automação crashou.
+        Permite concluir o resultado sem esperar o timeout inteiro."""
+        inst = self.automations.get(t)
+        th = self.automation_threads.get(t)
+        if th is None or not th.is_alive():
+            return True
+        return bool(getattr(inst, 'crashed', False))
+
+    def _aguardar_operacional(self, targets, timeout_s) -> bool:
+        """Espera todos os alvos ficarem operacionais, ou concluir falha/timeout.
+
+        Isto define o RTO real do reinício: o painel só conta como recuperado
+        quando o Tasy está de pé e o monitor ativado. Se o Tasy continuar
+        indisponível, a automação crasha durante o fluxo e isto retorna False —
+        agora o resultado 'falha' reflete a realidade (painel NÃO operacional),
+        em vez de marcar falha com o painel funcionando.
+        """
+        limite = time.monotonic() + timeout_s
+        while time.monotonic() < limite:
+            if all(self._instancia_operacional(t) for t in targets):
+                return True
+            # Falha definitiva de algum alvo encerra a espera mais cedo.
+            if any(self._alvo_falhou(t) for t in targets):
+                return False
+            time.sleep(RTO_POLL_S)
+        return False
 
     def _send_status_update(self):
         status_geral = {t: i.status for t, i in self.automations.items()}
@@ -562,13 +645,19 @@ class OperadorClient:
                         f"RAM={metrics.get('ram_pct')}% "
                         f"Disco={metrics.get('disco_pct')}%"
                     )
+                # Aproveita o mesmo tick para escoar eventos (erros) bufferizados.
+                # Isolado: falha aqui não afeta o envio de saúde.
+                try:
+                    self.event_reporter.flush()
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error(f"Erro no loop de métricas de saúde: {e}")
             time.sleep(30)
 
     def _run_daily_task(self):
         logger.info("⏰ [AGENDADOR] Executando tarefa diária: Reiniciar todas as automações.")
-        self._restart_automation(target='ambos')
+        self._restart_automation(target='ambos', motivo='Agendamento diário')
 
     def _run_scheduler(self):
         logger.info("📅 [AGENDADOR] Serviço de agendamento de tarefas iniciado.")
@@ -594,7 +683,7 @@ class OperadorClient:
                     self.automations.pop(target, None)
                     delay = 10
                     logger.info(f"   - Agendando reinício completo para '{target}' em {delay} segundos...")
-                    threading.Timer(delay, self._restart_automation, args=[target]).start()
+                    threading.Timer(delay, self._restart_automation, args=[target, 'Recuperação automática']).start()
 
     def run(self) -> int:
         try:
