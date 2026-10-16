@@ -495,7 +495,14 @@ class EdgeBrowserManager:
             "--disable-sync",
             "--no-default-browser-check",
             "--disable-session-crashed-bubble",
-            "--disable-popup-blocking"
+            "--disable-popup-blocking",
+            # Deixa a página do painel emitir som sem clique/tecla. Desde o Edge 155,
+            # `speechSynthesis.speak()` é recusado com 'not-allowed' em páginas sem
+            # interação do usuário — e o login da automação é por JavaScript, que não
+            # conta como interação: o painel ficava mudo (incidente de 15/10/2026).
+            # A VoiceManager confere se isto está valendo e, se não estiver, aplica
+            # uma reserva (gesto via DevTools). Ver voice_manager.garantir_fala_liberada.
+            "--autoplay-policy=no-user-gesture-required"
         ]
 
         try:

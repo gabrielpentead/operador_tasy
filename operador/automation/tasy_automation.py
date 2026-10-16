@@ -117,6 +117,9 @@ class TasyAutomation:
                     if not self.stop_event.is_set():
                         self.crashed = True
                         break  # Sai do loop para o 'finally'
+                # Leve e limitada a 1x por minuto internamente; nunca levanta exceção
+                # nem interfere no resultado da saúde.
+                self.voice_manager.verificar_voz()
 
         except Exception as e:
             # Se a parada não foi solicitada, é um erro crítico que deve ser registrado.

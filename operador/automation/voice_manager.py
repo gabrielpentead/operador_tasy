@@ -1,7 +1,15 @@
 import logging
+import time
 from typing import Optional
 
 logger = logging.getLogger("TasyOperador.VoiceManager")
+
+# Intervalo mínimo entre duas verificações periódicas da voz (verificar_voz), chamada
+# pelo laço de saúde da automação a cada poucos segundos.
+VERIFICACAO_VOZ_S = 60
+
+# Erros de fala que NÃO indicam defeito: o próprio Tasy cancela/interrompe chamadas.
+_ERROS_DE_FALA_IGNORADOS = ('interrupted', 'canceled')
 
 # Espelham exatamente os literais usados dentro de VoiceManager.speak(): o nome da
 # voz e o lang do utterance. Existem só para o operador PODER REPORTAR ao servidor
@@ -27,8 +35,13 @@ DEFAULT_VOICE_LANG = "pt-BR"
 #
 # SEGURANÇA: o ajuste roda dentro de try/catch e a chamada original é SEMPRE
 # repassada. Uma falha aqui nunca pode calar uma chamada de paciente.
-# Só age quando a voz é multilíngue ou não foi definida; caso contrário não toca
-# em nada — se o Tasy passar a escolher direito, este script fica inerte.
+#
+# 1.5.10 (15/10/2026, Edge 155): passa a IMPOR a Francisca e o pt-BR em TODA fala,
+# não só quando a voz pedida é multilíngue. Requisito do NTI: as chamadas saem
+# exclusivamente na voz da Francisca e nunca em outro idioma. Se a Francisca ainda
+# não estiver no catálogo (só nos primeiros instantes após abrir o Edge), usa outra
+# voz pt-BR não multilíngue — nunca a voz que o Tasy pediu, se ela for de outro idioma.
+# Registra em __vozDiag a voz que o Tasy PEDIU e a que de fato FOI usada.
 _CORRECAO_PTBR_JS = r"""
 (function () {
   try {
@@ -59,14 +72,36 @@ _CORRECAO_PTBR_JS = r"""
       return null;
     }
 
+    // Contadores PASSIVOS de cada fala (lidos por VoiceManager.verificar_voz): quantas
+    // foram pedidas, quantas começaram e quais erros o navegador devolveu. Só escutam
+    // com addEventListener — nunca substituem onstart/onend/onerror do Tasy.
+    var diag = window.__vozDiag = { falas: 0, iniciadas: 0, erros: {}, pedidas: {}, usadas: {}, langs: {} };
+    function contar(mapa, chave) { mapa[chave] = (mapa[chave] || 0) + 1; }
+
     var original = synth.speak.bind(synth);
     synth.speak = function (u) {
       try {
         if (u) {
-          if (!u.lang) u.lang = 'pt-BR';
-          if (!u.voice || MULTILINGUE.test(u.voice.name || '')) {
-            var boa = escolherVoz();
-            if (boa) u.voice = boa;
+          var pedida = u.voice ? u.voice.name : '(nenhuma)';
+          var boa = escolherVoz();
+          if (boa) {
+            u.voice = boa;
+          } else if (u.voice && (MULTILINGUE.test(u.voice.name || '')
+                     || (u.voice.lang || '').toLowerCase().indexOf('pt-br') !== 0)) {
+            u.voice = null;   // sem voz pt-BR no catálogo: nunca deixar a de outro idioma
+          }
+          u.lang = 'pt-BR';
+          diag.falas++;
+          contar(diag.pedidas, pedida);
+          contar(diag.usadas, u.voice ? u.voice.name : '(padrão do navegador)');
+          contar(diag.langs, u.lang);
+          if (!u.__vozDiag) {
+            u.__vozDiag = true;
+            u.addEventListener('start', function () { diag.iniciadas++; });
+            u.addEventListener('error', function (ev) {
+              var k = (ev && ev.error) || 'desconhecido';
+              diag.erros[k] = (diag.erros[k] || 0) + 1;
+            });
           }
         }
       } catch (e) { /* jamais impedir a fala */ }
@@ -82,45 +117,251 @@ _CORRECAO_PTBR_JS = r"""
 """
 
 
+# Sonda SILENCIOSA: a página tem permissão para emitir som sem interação do usuário?
+#
+# POR QUE EXISTE (incidente de 15/10/2026): o Edge 155 passou a recusar
+# `speechSynthesis.speak()` com o erro `not-allowed` em documentos que nunca receberam
+# clique ou tecla. O login da automação é feito por JavaScript (selenium_utils), que não
+# conta como interação — o painel ficava COMPLETAMENTE MUDO. Com o Edge 153 falava.
+#
+# A sonda cria um AudioContext sem nenhum nó (não toca nada, não entra na fila de fala
+# do Tasy) e lê o estado: 'running' = som liberado; 'suspended' = bloqueado. Medido no
+# Edge 155, nos três cenários, sempre igual ao resultado de uma fala real:
+#   sem nada                    -> suspended -> Francisca: not-allowed
+#   --autoplay-policy (abertura) -> running   -> Francisca falou
+#   gesto via CDP               -> running   -> Francisca falou
+_SONDA_FALA_JS = r"""
+return (function () {
+  var r = { ativada: !!(navigator.userActivation && navigator.userActivation.hasBeenActive), autoplay: null };
+  try {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) { var c = new AC(); r.autoplay = (c.state === 'running'); try { c.close(); } catch (e) {} }
+  } catch (e) { r.erro = String(e && e.message ? e.message : e); }
+  return r;
+})();
+"""
+
+# Instala a correção na janela principal E em todos os frames de mesma origem (recursivo).
+# `w.eval(src)` executa o script no escopo global do próprio frame, então `window`
+# dentro dele é o do frame. Frames de outra origem são apenas listados.
+_INSTALAR_EM_TODOS_OS_FRAMES_JS = r"""
+var src = arguments[0], out = [];
+function instalar(w, caminho) {
+  var r;
+  try { r = w.eval(src); } catch (e) { r = 'erro: ' + (e && e.message ? e.message : e); }
+  out.push([caminho, r]);
+  var n = 0;
+  try { n = w.frames.length; } catch (e) {}
+  for (var i = 0; i < n; i++) {
+    try { void w.frames[i].document; instalar(w.frames[i], caminho + '/' + i); }
+    catch (e) { out.push([caminho + '/' + i, 'outra-origem']); }
+  }
+}
+instalar(window, 'principal');
+return out;
+"""
+
+# Soma os contadores passivos de todos os frames de mesma origem.
+_LER_DIAG_JS = r"""
+var t = { falas: 0, iniciadas: 0, erros: {}, pedidas: {}, usadas: {}, langs: {}, frames: 0 };
+function somar(dst, src) { for (var k in (src || {})) dst[k] = (dst[k] || 0) + src[k]; }
+function visitar(w) {
+  var d = null;
+  try { d = w.__vozDiag; } catch (e) { return; }
+  if (d) {
+    t.frames++; t.falas += d.falas || 0; t.iniciadas += d.iniciadas || 0;
+    somar(t.erros, d.erros); somar(t.pedidas, d.pedidas); somar(t.usadas, d.usadas); somar(t.langs, d.langs);
+  }
+  var n = 0;
+  try { n = w.frames.length; } catch (e) {}
+  for (var i = 0; i < n; i++) { try { visitar(w.frames[i]); } catch (e) {} }
+}
+visitar(window);
+return t;
+"""
+
+
 class VoiceManager:
     """Gerenciador de síntese de voz simplificado usando a voz padrão do browser."""
     
     def __init__(self, driver=None):
         self.driver = driver
-        
+        self._estado_fala: Optional[str] = None
+        self._ultima_verificacao = 0.0
+        self._diag_anterior: dict = {}
+
     def set_driver(self, driver):
         """Define o driver do navegador e instala a correção de voz das chamadas."""
         self.driver = driver
+        self._estado_fala = None
+        self._ultima_verificacao = time.monotonic()
+        self._diag_anterior = {}
+        self._registrar_em_documentos_novos()
         self.garantir_voz_ptbr()
 
+    def _registrar_em_documentos_novos(self):
+        """Pede ao Edge (DevTools) que rode a correção em TODO documento e frame que
+        abrir daqui em diante, ANTES dos scripts da página.
+
+        Assim a correção já está lá quando o Tasy monta a tela de senhas — mesmo que
+        ele fale de dentro de um iframe, recarregue a página ou guarde uma referência
+        ao speechSynthesis logo ao carregar. A injeção direta (garantir_voz_ptbr)
+        continua existindo como segunda via.
+        """
+        try:
+            # O script só roda nos documentos novos com o domínio Page ativo. O
+            # msedgedriver normalmente já o ativa; ativar de novo é inofensivo.
+            self.driver.execute_cdp_cmd("Page.enable", {})
+            self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument",
+                                        {"source": _CORRECAO_PTBR_JS})
+            logger.info("🔊 Correção de voz registrada para todas as páginas e frames novos.")
+        except Exception as e:
+            logger.warning(f"🔊 Não foi possível registrar a correção para páginas novas "
+                           f"(segue pela injeção direta): {e}")
+
     def garantir_voz_ptbr(self) -> bool:
-        """Instala, uma vez por documento, a correção de voz das chamadas do Tasy.
+        """Instala a correção de voz das chamadas do Tasy na página e em todos os
+        frames de mesma origem, e garante que o Edge deixe a página falar.
 
-        Idempotente e barata: se já estiver instalada, o script devolve
-        'ja-instalado' e não faz nada. Chamada em set_driver() e no início de
-        speak(), o que cobre o ciclo normal da automação.
+        Idempotente e barata: onde já estiver instalada, o script devolve
+        'ja-instalado' e não faz nada. Chamada em set_driver(), no início de
+        speak() e, a cada VERIFICACAO_VOZ_S, por verificar_voz() — que também
+        a reinstala se algum documento ou frame tiver sido recarregado.
 
-        Se o documento for recarregado de fato, o gancho se perde — mas nesse
-        cenário a automação também perde as referências dos elementos,
-        `_is_healthy()` falha e o restart existente recria o navegador,
-        reinstalando a correção. Por isso não há reinjeção periódica aqui.
+        Quando instala em algum documento novo, confere se a fala está liberada
+        (garantir_fala_liberada).
 
         NUNCA levanta exceção: falhar em instalar não pode derrubar a automação.
         """
         if not self.driver:
             return False
         try:
-            resultado = self.driver.execute_script(_CORRECAO_PTBR_JS)
+            resultados = self.driver.execute_script(_INSTALAR_EM_TODOS_OS_FRAMES_JS, _CORRECAO_PTBR_JS)
         except Exception as e:
             logger.warning(f"🔊 Correção de voz não pôde ser instalada (não crítico): {e}")
             return False
 
-        if resultado == 'instalado':
-            logger.info("🔊 Correção de voz pt-BR instalada no painel "
-                        "(troca voz multilíngue do Tasy por voz pt-BR comum).")
-        elif resultado != 'ja-instalado':
-            logger.warning(f"🔊 Correção de voz não instalada: {resultado}")
-        return resultado in ('instalado', 'ja-instalado')
+        novos = [f for f, r in (resultados or []) if r == 'instalado']
+        problemas = [(f, r) for f, r in (resultados or []) if r not in ('instalado', 'ja-instalado')]
+        if novos:
+            logger.info(f"🔊 Correção de voz pt-BR instalada (impõe a Francisca e o pt-BR em toda fala) "
+                        f"em: {', '.join(novos)}.")
+            self.garantir_fala_liberada()
+        for f, r in problemas:
+            logger.warning(f"🔊 Correção de voz não instalada no frame '{f}': {r}")
+        return bool(resultados) and not any(f == 'principal' and r not in ('instalado', 'ja-instalado')
+                                            for f, r in resultados)
+
+    def _sondar_fala(self) -> Optional[dict]:
+        """Lê, sem emitir som, se a página pode falar (ver _SONDA_FALA_JS)."""
+        try:
+            r = self.driver.execute_script(_SONDA_FALA_JS)
+            return r if isinstance(r, dict) else None
+        except Exception as e:
+            logger.debug(f"🔊 Sonda de fala falhou: {e}")
+            return None
+
+    def _registrar_estado_fala(self, estado: str, nivel: int):
+        """Registra no log só quando o estado da fala MUDA (evita repetir a cada minuto)."""
+        if estado != self._estado_fala:
+            self._estado_fala = estado
+            logger.log(nivel, f"🔊 Fala {estado}")
+
+    def garantir_fala_liberada(self, forcar_gesto: bool = False) -> bool:
+        """Garante que o Edge deixe a página do painel falar.
+
+        Duas camadas independentes, para não depender de um único comportamento
+        do navegador (o que mudou entre o Edge 153 e o 155 pode mudar de novo):
+          1. PRINCIPAL — o Edge é aberto com --autoplay-policy=no-user-gesture-required
+             (browser_manager.start_browser). Libera a fala sem mexer na página.
+          2. RESERVA — se a sonda disser que o som continua bloqueado (ou se o
+             painel registrou falas recusadas com 'not-allowed'), aplica UM gesto
+             de usuário via DevTools (Runtime.evaluate com userGesture). Não clica,
+             não digita e não muda nada visível; só marca o documento como ativado.
+
+        NUNCA levanta exceção.
+        """
+        if not self.driver:
+            return False
+        estado = self._sondar_fala()
+        if not forcar_gesto and estado and estado.get('autoplay') is True:
+            origem = "página ativada" if estado.get('ativada') else "reprodução automática do Edge"
+            self._registrar_estado_fala(f"liberada ({origem}).", logging.INFO)
+            return True
+
+        try:
+            self.driver.execute_cdp_cmd("Runtime.evaluate", {"expression": "void 0", "userGesture": True})
+        except Exception as e:
+            logger.warning(f"🔊 Não foi possível aplicar o gesto de reserva via DevTools: {e}")
+
+        estado = self._sondar_fala()
+        if estado and estado.get('autoplay') is True:
+            self._registrar_estado_fala(
+                "liberada por gesto via DevTools (reserva: a reprodução automática "
+                "do Edge não estava valendo).", logging.WARNING)
+            return True
+        self._registrar_estado_fala(
+            f"BLOQUEADA pelo Edge: as chamadas vão sair sem som (sonda: {estado}).", logging.ERROR)
+        return False
+
+    def verificar_voz(self):
+        """Verificação periódica e leve, chamada pelo laço de saúde da automação.
+
+        No máximo a cada VERIFICACAO_VOZ_S:
+          - reinstala a correção se o documento tiver sido recarregado;
+          - lê os contadores passivos das falas e registra as que FALHARAM desde a
+            última leitura (assim um painel mudo aparece no log, em vez de passar
+            despercebido como no incidente de 15/10/2026);
+          - se houver falas recusadas com 'not-allowed', aplica a reserva.
+
+        Não emite som, não toca na fila de fala e NUNCA levanta exceção.
+        """
+        if not self.driver:
+            return
+        agora = time.monotonic()
+        if agora - self._ultima_verificacao < VERIFICACAO_VOZ_S:
+            return
+        self._ultima_verificacao = agora
+        try:
+            self.garantir_voz_ptbr()
+            diag = self.driver.execute_script(_LER_DIAG_JS)
+        except Exception as e:
+            logger.debug(f"🔊 Verificação periódica da voz falhou: {e}")
+            return
+        if not isinstance(diag, dict):
+            return
+
+        anterior = self._diag_anterior
+        if diag.get('falas', 0) < anterior.get('falas', 0):
+            anterior = {}   # documento novo: contadores recomeçaram do zero
+        self._diag_anterior = diag
+
+        def delta(campo):
+            atual, antes = diag.get(campo) or {}, anterior.get(campo) or {}
+            return {k: v - antes.get(k, 0) for k, v in atual.items() if v > antes.get(k, 0)}
+
+        falas_novas = diag.get('falas', 0) - anterior.get('falas', 0)
+        if falas_novas > 0:
+            usadas = delta('usadas')
+            pedidas = delta('pedidas')
+            fora = {k: v for k, v in usadas.items() if k != DEFAULT_VOICE_NAME}
+            resumo = (f"{falas_novas} fala(s) no último minuto | voz usada: "
+                      + ", ".join(f"{k.split(' - ')[0]}={v}" for k, v in sorted(usadas.items()))
+                      + " | voz pedida pelo Tasy: "
+                      + ", ".join(f"{k.split(' - ')[0]}={v}" for k, v in sorted(pedidas.items())))
+            if fora:
+                logger.warning(f"🔊 {resumo} | ATENÇÃO: fala(s) fora da Francisca.")
+            else:
+                logger.info(f"🔊 {resumo}")
+
+        novos = {k: v for k, v in delta('erros').items() if k not in _ERROS_DE_FALA_IGNORADOS}
+        if novos:
+            resumo = ", ".join(f"{k}={v}" for k, v in sorted(novos.items()))
+            logger.warning(f"🔊 Falas que falharam no último minuto: {resumo} "
+                           f"(total no painel: {diag.get('falas', 0)} pedidas, "
+                           f"{diag.get('iniciadas', 0)} iniciadas).")
+            if 'not-allowed' in novos:
+                self.garantir_fala_liberada(forcar_gesto=True)
 
     def speak(self, text: str) -> bool:
         """

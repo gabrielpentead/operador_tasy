@@ -8,7 +8,7 @@ import socket
 import platform
 
 # === INFORMAÇÕES DO SISTEMA ===
-VERSION = "1.5.8"
+VERSION = "1.5.10"
 HOSTNAME = socket.gethostname()
 SYSTEM_INFO = f"{platform.system()} {platform.release()}"
 
